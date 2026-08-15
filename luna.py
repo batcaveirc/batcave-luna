@@ -60,6 +60,7 @@ def _credit() -> str:
 
 COGS = [
     "cogs.admin_cog",
+    "cogs.ai_cog",
     "cogs.economy_cog",
     "cogs.shared_cog",
     "cogs.social_cog",

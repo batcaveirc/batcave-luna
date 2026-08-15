@@ -32,6 +32,12 @@ OWNER_IDS = {
 }
 
 # ── IRC Bridge ────────────────────────────────────────────────────────────────
+# Hosted AI for the !!ai command. No localhost anywhere: the bot must run
+# unchanged on any host, so the key is a secret and the model an env var.
+GROQ_API_KEY        = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL          = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL_FALLBACK = os.getenv("GROQ_MODEL_FALLBACK", "openai/gpt-oss-20b")
+
 IRC_SERVER        = os.getenv("IRC_SERVER",   "irc.hybridirc.com")
 IRC_PORT          = int(os.getenv("IRC_PORT", "6697"))
 IRC_SSL           = True
