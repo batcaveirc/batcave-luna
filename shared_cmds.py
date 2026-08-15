@@ -41,10 +41,23 @@ OWNER_IDS = {
 }
 
 
-def is_irc_owner(nick: str) -> bool:
-    """Only the configured owners, and never 'everyone' by default — an empty
-    owner list must not mean an open door for a command that kicks people."""
-    return nick.lower() in OWNERS_IRC
+def is_irc_owner(nick: str, bridge=None, channel: str = "") -> bool:
+    """Configured owners, or a channel operator.
+
+    An empty LUNA_OWNERS_IRC must not mean "everyone" for a command that
+    decides whether people get kicked — but it must not mean "nobody" either,
+    which is what happened live: $mod answered with silence because the secret
+    was never set. Falling back to channel ops is self-configuring and matches
+    who already holds that authority in the room.
+    """
+    if nick.lower() in OWNERS_IRC:
+        return True
+    if bridge is not None and channel:
+        try:
+            return bridge.has_prefix(channel, nick)
+        except Exception:
+            return False
+    return False
 
 
 def is_irc_authorized(nick: str) -> bool:
@@ -88,10 +101,11 @@ class SharedCommands:
     def __init__(self, bot, bridge):
         self.bot = bot
         self.bridge = bridge
+        self._channel = ""
 
     # ── Dispatch entry points ────────────────────────────────────────────
 
-    def dispatch_irc(self, nick: str, text: str) -> Optional[str]:
+    def dispatch_irc(self, nick: str, text: str, channel: str = "") -> Optional[str]:
         """Parse a prefixed command from an IRC PRIVMSG. Reply text or None.
 
         The prefix comes from config: hardcoding it here meant every command
@@ -108,6 +122,7 @@ class SharedCommands:
         args = parts[1] if len(parts) > 1 else ""
         if not is_irc_authorized(nick):
             return None  # silent deny on IRC
+        self._channel = channel
         return self._run("irc", nick, None, cmd, args)
 
     def dispatch_discord(
@@ -122,6 +137,8 @@ class SharedCommands:
         return self._run("discord", username, user_id, cmd, args)
 
     def _run(self, platform: str, name: str, user_id, cmd: str, args: str) -> Optional[str]:
+        """`_channel` is set by the caller so a command can check op status in
+        the room it was typed in."""
         method = getattr(self, f"cmd_{cmd}", None)
         if method is None:
             return None
@@ -148,6 +165,13 @@ class SharedCommands:
                 f"[\x02Fun\x02] {p}roll [NdN] · {p}flip · {p}choose a, b, c · "
                 f"{p}calc 5 x 89 · {p}weather [city]"
             )
+        if sub in ("mod", "moderation"):
+            return (
+                f"[\x02Moderation\x02] {p}mod on|off (channel operators) — I "
+                f"cover what Dracula cannot see: disguised text, mass pings, "
+                f"colour flooding, adverts, walls of text, join flooding. "
+                f"Warn first, kick second, never a ban."
+            )
         if sub in ("irc", "bridge"):
             return (
                 f"[\x02Bridge\x02] {p}ping · {p}nicks who is here · "
@@ -163,7 +187,7 @@ class SharedCommands:
             f"Talk to me: just say my name, or {p}ai <question> · "
             f"Fun: {p}roll {p}flip {p}choose {p}calc {p}weather · "
             f"Bridge: {p}ping {p}nicks {p}say · "
-            f"More: {p}help fun | {p}help bridge"
+            f"More: {p}help fun | {p}help bridge | {p}help mod"
         )
 
 
@@ -230,8 +254,8 @@ class SharedCommands:
         moderator loose in a live room is how a regular gets thrown out
         mid-joke.
         """
-        if platform == "irc" and not is_irc_owner(name):
-            return None
+        if platform == "irc" and not is_irc_owner(name, self.bridge, self._channel):
+            return "that one is for channel operators."
         mod = getattr(self.bridge, "moderator", None)
         if mod is None:
             return "moderation is not loaded."

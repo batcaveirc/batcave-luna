@@ -35,6 +35,21 @@ _AI_COOLDOWN      = 12       # seconds between AI replies to one person
 _AI_CHANNEL_GAP   = 4        # seconds between AI replies in a channel
 
 
+def _wrap(text: str, size: int = 380) -> List[str]:
+    """Split on word boundaries. IRC drops everything past ~512 bytes for the
+    whole line, so a long answer loses its tail with no error anywhere."""
+    words, out, line = text.split(" "), [], ""
+    for w in words:
+        if line and len(line) + 1 + len(w) > size:
+            out.append(line)
+            line = w
+        else:
+            line = f"{line} {w}" if line else w
+    if line:
+        out.append(line)
+    return out or [""]
+
+
 def numeric(line: str) -> str:
     """The server numeric of a line, or "".
 
@@ -109,6 +124,8 @@ class IRCBridge:
         self._last_reclaim = 0.0
         self._ai_cooldown: Dict[str, float] = {}   # nick(lower) -> ts
         self._ai_last_channel = 0.0
+        self._connect_time = time.time()
+        self._last_tags: Dict[str, str] = {}
 
         from utils.moderation import Moderator
         self.moderator = Moderator(self)
@@ -373,9 +390,14 @@ class IRCBridge:
 
     # ── Send queue ────────────────────────────────────────────────────────────
 
-    def _queue(self, irc_channel: str, text: str):
+    def _queue(self, irc_channel: str, text: str, verb: str = "PRIVMSG"):
+        """verb is NOTICE for command replies: a NOTICE to a nick is the IRC
+        convention for a bot answering one person without addressing the room."""
         with self._send_lock:
-            self._send_q.append((irc_channel, text))
+            self._send_q.append((irc_channel, text, verb))
+
+    def _notice(self, nick: str, text: str) -> None:
+        self._queue(nick, text, "NOTICE")
 
     def _sender_loop(self):
         """Drain the send queue at _SEND_DELAY intervals (rate-limiting)."""
@@ -386,9 +408,9 @@ class IRCBridge:
             with self._send_lock:
                 if not self._send_q:
                     continue
-                irc_ch, text = self._send_q.popleft()
+                irc_ch, text, verb = self._send_q.popleft()
             try:
-                self._raw(f"PRIVMSG {irc_ch} :{text}")
+                self._raw(f"{verb} {irc_ch} :{text}")
             except Exception as e:
                 print(f"[irc_bridge] Sender error: {e}")
 
@@ -428,6 +450,12 @@ class IRCBridge:
         self._sock.connect((config.IRC_SERVER, config.IRC_PORT))
         self._last_ping = time.time()
         self._nick = config.IRC_NICK
+        self._connect_time = time.time()
+        # server-time marks replayed +H history with when it was ORIGINALLY
+        # said. Without it Luna re-relays the whole backlog to Discord on every
+        # six-hour restart, which is a wall of duplicated conversation.
+        self._raw("CAP REQ :server-time")
+        self._raw("CAP END")
         self._raw(f"NICK {config.IRC_NICK}")
         self._raw(f"USER {config.IRC_NICK} 0 * :{config.IRC_REALNAME}")
 
@@ -469,7 +497,32 @@ class IRCBridge:
 
     # ── Line handler ──────────────────────────────────────────────────────────
 
+    def _is_replay(self, tags: Dict[str, str]) -> bool:
+        """True for a line the server replayed out of channel history (+H).
+
+        Untagged lines count as live: if the server does not support
+        server-time we must not start discarding real conversation.
+        """
+        stamp = tags.get("time")
+        if not stamp:
+            return False
+        try:
+            from datetime import datetime
+            when = datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return False
+        return when < self._connect_time - 5
+
     def _handle_line(self, line: str):
+        tags: Dict[str, str] = {}
+        if line.startswith("@"):
+            head, _, line = line.partition(" ")
+            for kv in head[1:].split(";"):
+                k, _, v = kv.partition("=")
+                if k:
+                    tags[k] = v
+        self._last_tags = tags
+
         # PING keepalive
         if line.startswith("PING"):
             self._raw("PONG " + line[5:])
@@ -604,6 +657,11 @@ class IRCBridge:
             # Ignore own messages
             if nick.lower() in (config.IRC_NICK.lower(), f"{config.IRC_NICK}_".lower()):
                 return
+            # Replayed channel history is not new conversation: relaying it
+            # would repost the backlog to Discord on every restart, and
+            # answering it would have Luna reply to questions from hours ago.
+            if self._is_replay(getattr(self, "_last_tags", {})):
+                return
 
             # ── Channel message ──
             if target.startswith("#"):
@@ -636,11 +694,14 @@ class IRCBridge:
                     try:
                         from shared_cmds import SharedCommands
                         reply = SharedCommands.get(self.bot, self).dispatch_irc(
-                            nick, message)
+                            nick, message, target)
                         if reply:
-                            for chunk in str(reply).split("\n")[:4]:
-                                if chunk.strip():
-                                    self._queue(target, chunk[:430])
+                            # NOTICE to the caller, not the channel: a help
+                            # listing is for the person who asked. And split on
+                            # word boundaries — IRC truncates a long line
+                            # silently, which is how $help lost its tail.
+                            for chunk in _wrap(str(reply)):
+                                self._notice(nick, chunk)
                             return
                     except Exception as e:  # noqa: BLE001 — never kill the reader
                         print(f"[irc_bridge] shared command error: {e}")
