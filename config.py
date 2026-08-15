@@ -41,9 +41,6 @@ IRC_CHANNEL       = os.getenv("IRC_CHANNEL",       "#BatCave")
 IRC_REALNAME      = "Luna — Moon Witch of the BatCave"
 
 # ── AI ────────────────────────────────────────────────────────────────────────
-GROQ_API_KEY   = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL     = os.getenv("GROQ_MODEL",   "llama-3.1-8b-instant")
-GROQ_MODEL_SMART = "llama3-70b-8192"
 
 # ── BatBot monitoring ────────────────────────────────────────────────────────
 # HTTP keep-alive URL for BatBot's Replit (e.g. https://batbot.yourname.repl.co)

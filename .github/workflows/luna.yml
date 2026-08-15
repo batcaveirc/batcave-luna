@@ -37,7 +37,6 @@ jobs:
           DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
           OWNER_IDS: ${{ secrets.OWNER_IDS }}
           IRC_NICKSERV_PASS: ${{ secrets.IRC_NICKSERV_PASS }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
 
           # ── IRC: plain defaults so a missing secret can never stop the bot.
           #    IRC_CHANNEL defaults to the emoji room Luna lives in. ────────

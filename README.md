@@ -21,7 +21,7 @@ Actions). Everything else has a working default in the workflow.
 | `IRC_NICKSERV_PASS` | identifies `Luna1` so the nick isn't force-renamed |
 
 Optional: `IRC_NICK`, `IRC_CHANNEL`, `BRIDGE_CHANNEL`, `MOD_ROLE`,
-`LUNA_CREDIT`, `LUNA_OWNERS_IRC`, `LUNA_PRIMARY_OWNER`, `GROQ_API_KEY`,
+`LUNA_CREDIT`, `LUNA_OWNERS_IRC`, `LUNA_PRIMARY_OWNER`, `NOTSOBOT_EXTRA_CMDS`,
 `STARALIGN_RELAY_URL` + `STARALIGN_RELAY_SECRET`, `LUNA_BRAWL`.
 
 Then run the workflow once from the Actions tab; after that the cron keeps it

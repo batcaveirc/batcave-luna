@@ -47,6 +47,7 @@ bot = commands.Bot(
 )
 
 bridge          = IRCBridge(bot)
+bot._irc_bridge = bridge   # exposed to cogs
 
 
 def _credit() -> str:
@@ -54,11 +55,11 @@ def _credit() -> str:
     public repo never carries a real person's handle."""
     who = os.getenv("LUNA_CREDIT", "").strip()
     return f" created by **{who}**" if who else ""
-bot._irc_bridge = bridge   # exposed to cogs
+
+
 
 COGS = [
     "cogs.admin_cog",
-    "cogs.ai_cog",
     "cogs.economy_cog",
     "cogs.shared_cog",
     "cogs.social_cog",
