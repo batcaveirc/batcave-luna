@@ -80,6 +80,8 @@ def _allowed_notsobot_cmds() -> frozenset:
 
 
 _NICK_RECLAIM_SECS = 60      # how often to check we still hold our own nick
+_AI_COOLDOWN      = 12       # seconds between AI replies to one person
+_AI_CHANNEL_GAP   = 4        # seconds between AI replies in a channel
 
 
 def numeric(line: str) -> str:
@@ -154,6 +156,8 @@ class IRCBridge:
         # that assumes otherwise stops recognising its own messages.
         self._nick = config.IRC_NICK
         self._last_reclaim = 0.0
+        self._ai_cooldown: Dict[str, float] = {}   # nick(lower) -> ts
+        self._ai_last_channel = 0.0
 
 
     # ── Mapping helpers ───────────────────────────────────────────────────────
@@ -310,6 +314,45 @@ class IRCBridge:
         ch = (channel or self._default_irc_channel()).lower()
         with self._topics_lock:
             return self._topics.get(ch)
+
+    def ask_luna(self, irc_ch: str, nick: str, prompt: str) -> bool:
+        """Answer someone in the channel, using the Discord loop for the call.
+
+        The IRC reader runs in its own thread and the AI call is async, so the
+        coroutine is scheduled on Discord's loop and the reply is queued from
+        the callback. Blocking the reader for the length of a generation would
+        stall the relay for everyone else in the room.
+        """
+        if self.loop is None or not prompt.strip():
+            return False
+        now = time.time()
+        key = nick.lower()
+        if now - self._ai_cooldown.get(key, 0.0) < _AI_COOLDOWN:
+            return False                      # quietly ignore, not an error
+        if now - self._ai_last_channel < _AI_CHANNEL_GAP:
+            return False
+        self._ai_cooldown[key] = now
+        self._ai_last_channel = now
+
+        from cogs.ai_cog import ask
+
+        def _done(fut):
+            try:
+                reply = fut.result()
+            except Exception as e:  # noqa: BLE001
+                print(f"[irc_bridge] AI error: {e}")
+                return
+            if reply:
+                one_line = " ".join(str(reply).split())
+                self._queue(irc_ch, f"{nick}: {one_line[:400]}")
+
+        try:
+            fut = asyncio.run_coroutine_threadsafe(ask(prompt), self.loop)
+            fut.add_done_callback(_done)
+            return True
+        except Exception as e:  # noqa: BLE001
+            print(f"[irc_bridge] AI dispatch failed: {e}")
+            return False
 
     def _reclaim_nick(self) -> None:
         """Re-identify, evict whatever holds our nick, take it back, rejoin.
@@ -575,7 +618,21 @@ class IRCBridge:
 
             # ── Channel message ──
             if target.startswith("#"):
-                # Luna's own commands ($ping, $8ball, $roll, $weather …).
+                # "$ai <question>" — and plain "Luna, ..." because nobody in a
+                # chatroom types a command to talk to someone.
+                low = message.lower()
+                me = self._nick.lower()
+                asked = message.startswith(f"{config.PREFIX}ai ")
+                spoken_to = (
+                    low.startswith(f"{me} ") or low.startswith(f"{me},")
+                    or low.startswith(f"{me}:") or f" {me} " in f" {low} "
+                )
+                if asked or spoken_to:
+                    prompt = message[len(config.PREFIX) + 3:] if asked else message
+                    if self.ask_luna(target, nick, prompt):
+                        return
+
+                # Luna's own commands ($ping, $roll, $weather …).
                 # These existed but nothing ever called them from IRC, so the
                 # room could only use the notsobot passthrough. Runs before the
                 # bridge-mapping check so they work in any channel Luna is in.

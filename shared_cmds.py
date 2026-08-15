@@ -3,8 +3,12 @@ Shared command dispatcher for Luna.
 
 Works for BOTH Discord and IRC. Owner/whitelist gated.
 
-Commands: ping, help, 8ball, roll, calc, fact, dadjoke, quote,
-          choose, flip, weather, nicks, say, remind, batstatus
+Commands: help, ai, ping, roll, flip, choose, calc, weather, nicks, say, diag
+
+Deliberately short. Canned-list commands (8ball, fact, dadjoke, quote) were
+removed: a fixed list repeats within minutes and stops being funny. batstatus
+went with them — Dracula covers the room now — and remind, because it lived in
+memory on a host that restarts the process every six hours.
 """
 
 from __future__ import annotations
@@ -52,44 +56,9 @@ def is_discord_authorized(user_id: int) -> bool:
 
 # ── Data ─────────────────────────────────────────────────────────────────────
 
-_8BALL = [
-    "Yes.", "No.", "Absolutely.", "Doubtful.", "Ask again later.",
-    "The stars say yes.", "The moon says no.", "Without a doubt.",
-    "Very unlikely.", "Signs point to yes.", "My sources say no.",
-    "Concentrate and ask again.", "Outlook not so good.", "It is certain.",
-]
 
-_FACTS = [
-    "Octopuses have three hearts and blue blood.",
-    "Bananas are berries but strawberries are not.",
-    "A day on Venus is longer than its year.",
-    "Honey never spoils.",
-    "Sharks existed before trees.",
-    "Wombats produce cube-shaped poop.",
-    "Your stomach gets a new lining every 3-4 days.",
-    "The Eiffel Tower grows up to 6 inches taller in summer.",
-    "Bananas are slightly radioactive.",
-    "A group of flamingos is called a flamboyance.",
-]
 
-_DAD_JOKES = [
-    "Why don't scientists trust atoms? They make up everything.",
-    "I told my wife she drew her eyebrows too high. She looked surprised.",
-    "I'm reading a book about anti-gravity. It's impossible to put down.",
-    "Why did the scarecrow win an award? He was outstanding in his field.",
-    "I used to hate facial hair, but then it grew on me.",
-    "Did you hear about the mathematician who's afraid of negative numbers? He stops at nothing to avoid them.",
-    "Parallel lines have so much in common. It's a shame they'll never meet.",
-    "I would tell you a construction joke, but I'm still working on it.",
-]
 
-_QUOTES = [
-    "The only way out is through. - Robert Frost",
-    "Not all those who wander are lost. - Tolkien",
-    "We are all in the gutter, but some of us are looking at the stars. - Wilde",
-    "The night is darkest just before the dawn.",
-    "Even the darkest night will end and the sun will rise. - Hugo",
-]
 
 
 # ── SharedCommands singleton ─────────────────────────────────────────────────
@@ -113,10 +82,6 @@ class SharedCommands:
     def __init__(self, bot, bridge):
         self.bot = bot
         self.bridge = bridge
-        self._reminders: list = []
-        self._reminders_lock = threading.Lock()
-        self._reminder_thread_started = False
-        self._start_reminder_thread()
 
     # ── Dispatch entry points ────────────────────────────────────────────
 
@@ -174,14 +139,13 @@ class SharedCommands:
         sub = (args or "").strip().lower()
         if sub in ("fun", "games"):
             return (
-                f"[\x02Fun\x02] {p}8ball <q> · {p}roll [NdN] · {p}flip · "
-                f"{p}choose a, b, c · {p}fact · {p}dadjoke · {p}quote · "
-                f"{p}weather [city] · {p}calc 2+2"
+                f"[\x02Fun\x02] {p}roll [NdN] · {p}flip · {p}choose a, b, c · "
+                f"{p}calc 5 x 89 · {p}weather [city]"
             )
         if sub in ("irc", "bridge"):
             return (
                 f"[\x02Bridge\x02] {p}ping · {p}nicks who is here · "
-                f"{p}say <msg> cross-post · {p}remind 10m <task> · {p}batstatus"
+                f"{p}say <msg> cross-post"
             )
         if sub in ("all", "full", "list"):
             # The picture commands live in the bridge's allowlist; import it
@@ -205,16 +169,13 @@ class SharedCommands:
             f"\x02Luna\x02 — I bridge this room to a linked room elsewhere; "
             f"what you type here is relayed, and replies come back tagged. "
             f"(prefix \x02{p}\x02) — "
-            f"Fun: {p}8ball {p}roll {p}flip {p}choose {p}fact {p}dadjoke {p}quote {p}weather · "
-            f"Bridge: {p}ping {p}nicks {p}say {p}remind {p}batstatus · "
+            f"Talk to me: just say my name, or {p}ai <question> · "
+            f"Fun: {p}roll {p}flip {p}choose {p}calc {p}weather · "
+            f"Bridge: {p}ping {p}nicks {p}say · "
             f"Pictures: {p}img {p}magik {p}edit · "
             f"More: {p}help fun | {p}help bridge | {p}help img | {p}help all"
         )
 
-    def cmd_8ball(self, platform, name, args):
-        if not args.strip():
-            return "Ask a question, darling."
-        return random.choice(_8BALL)
 
     def cmd_roll(self, platform, name, args):
         expr = (args or "1d6").strip()
@@ -231,6 +192,8 @@ class SharedCommands:
         expr = (args or "").strip()
         if not expr:
             return f"Usage: {config.PREFIX}calc 2+2"
+        # "5 x 89" is how people actually write multiplication in chat.
+        expr = re.sub(r"(?<=[\d\s)])[xX](?=[\d\s(])", "*", expr)
         if not re.match(r"^[0-9+\-*/().\s]+$", expr):
             return "Only numbers and + - * / ( ) allowed."
         try:
@@ -239,14 +202,8 @@ class SharedCommands:
         except Exception:
             return "Bad expression."
 
-    def cmd_fact(self, platform, name, args):
-        return random.choice(_FACTS)
 
-    def cmd_dadjoke(self, platform, name, args):
-        return random.choice(_DAD_JOKES)
 
-    def cmd_quote(self, platform, name, args):
-        return random.choice(_QUOTES)
 
     def cmd_choose(self, platform, name, args):
         options = [x.strip() for x in (args or "").split(",") if x.strip()]
@@ -306,20 +263,6 @@ class SharedCommands:
                         pass
                     return
 
-    def cmd_remind(self, platform, name, args):
-        m = re.match(r"^(\d+)([mh])\s+(.+)$", (args or "").strip())
-        if not m:
-            return f"Usage: {config.PREFIX}remind 10m take pizza out"
-        n, unit, text = int(m.group(1)), m.group(2), m.group(3)
-        secs = n * (60 if unit == "m" else 3600)
-        if secs > 86400:
-            return "Max 24h."
-        due = time.time() + secs
-        with self._reminders_lock:
-            self._reminders.append((due, name, platform, text))
-        return f"reminder set for {n}{unit}: {text}"
-
-    # ── Vikram-GF persona & memory commands ──────────────────────────────
 
 
 
@@ -328,57 +271,52 @@ class SharedCommands:
 
 
 
-    def cmd_batstatus(self, platform, name, args):
-        url = getattr(config, "BATBOT_REPLIT_URL", "")
-        bat_nick = getattr(config, "BATBOT_IRC_NICK", "Vampire")
-        http_ok = False
-        if url:
-            try:
-                with urllib.request.urlopen(url, timeout=5) as r:
-                    http_ok = r.status == 200
-            except Exception:
-                http_ok = False
-        irc_ok = False
-        if self.bridge:
-            try:
-                irc_ok = self.bridge.is_nick_in_channel(bat_nick)
-            except Exception:
-                irc_ok = False
-        status = "ALIVE" if (http_ok and irc_ok) else "DOWN"
-        return f"BatBot: {status}  (http={http_ok}, irc={irc_ok})"
+
+
+    def cmd_diag(self, platform, name, args):
+        """Report what Luna can actually see on the far side of the bridge.
+
+        The picture commands were timing out with no way to tell why: from IRC,
+        "the other bot is not in the channel", "it ignored me" and "it is slow"
+        all look identical. This answers the first one directly.
+        """
+        bot = self.bot
+        if bot is None:
+            return "no Discord connection object — bridge is running standalone."
+
+        lines = []
+        user = getattr(bot, "user", None)
+        lines.append(f"logged in as {user}" if user else "NOT logged in to Discord")
+
+        try:
+            mapping = dict(self.bridge._d2i) if self.bridge else {}
+        except Exception:
+            mapping = {}
+        lines.append("bridges: " + (", ".join(f"#{d}<->{i}" for d, i in mapping.items())
+                                    or "none"))
+
+        target = (getattr(config, "BRIDGE_CHANNEL", "") or "").lower()
+        found = None
+        for guild in getattr(bot, "guilds", []):
+            for ch in getattr(guild, "text_channels", []):
+                if ch.name.lower() == target:
+                    found = ch
+                    break
+        if found is None:
+            lines.append(f"channel '{target}' NOT FOUND in any guild Luna is in")
+            return " | ".join(lines)
+
+        perms = found.permissions_for(found.guild.me) if found.guild.me else None
+        lines.append(f"channel #{found.name}: "
+                     f"send={getattr(perms, 'send_messages', '?')} "
+                     f"read={getattr(perms, 'read_messages', '?')}")
+
+        # The decisive fact: is the bot we are sending commands to even here?
+        bots = [m.name for m in getattr(found, "members", []) if getattr(m, "bot", False)]
+        lines.append(f"bots in that channel ({len(bots)}): "
+                     + (", ".join(bots[:12]) or "NONE — nothing can answer a command"))
+        return " | ".join(lines)
 
     # ── Reminder loop ────────────────────────────────────────────────────
 
-    def _start_reminder_thread(self) -> None:
-        if self._reminder_thread_started:
-            return
-        self._reminder_thread_started = True
-        t = threading.Thread(target=self._reminder_loop, daemon=True, name="luna-reminders")
-        t.start()
 
-    def _reminder_loop(self) -> None:
-        while True:
-            time.sleep(5)
-            now = time.time()
-            fired: list = []
-            with self._reminders_lock:
-                kept = []
-                for r in self._reminders:
-                    if r[0] <= now:
-                        fired.append(r)
-                    else:
-                        kept.append(r)
-                self._reminders = kept
-            for _due, who, plat, text in fired:
-                try:
-                    if plat == "discord":
-                        if self.bridge and self.bridge.loop and self.bridge.loop.is_running():
-                            asyncio.run_coroutine_threadsafe(
-                                self._post_discord(f"reminder for {who}: {text}"),
-                                self.bridge.loop,
-                            )
-                    else:
-                        if self.bridge:
-                            self.bridge.send_to_irc(f"reminder for {who}: {text}")
-                except Exception as e:
-                    print(f"[reminder] error firing: {e}")
