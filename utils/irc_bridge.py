@@ -78,9 +78,20 @@ class IRCBridge:
         if _d_def and _i_def:
             self._add_mapping(_d_def, _i_def)
 
+        # Channels Luna JOINS but does not relay. Moderation runs in these;
+        # nothing said there crosses to Discord. A room only starts relaying
+        # when someone runs $ircjoin for it on the Discord side, which keeps
+        # "she is present" and "this room is public elsewhere" separate
+        # decisions — the second one should always be deliberate.
+        self._extra: Set[str] = {
+            c.strip() if c.strip().startswith("#") else f"#{c.strip()}"
+            for c in os.getenv("IRC_EXTRA_CHANNELS", "").split(",") if c.strip()
+        }
+
         # ── Per-channel nick tracking ────────────────────────────────────────
         self._nicks: Dict[str, Set[str]] = {}   # irc_ch.lower() → set of nicks
         self._nicks_lock = threading.Lock()
+        self._prefixes: Dict[str, str] = {}   # "chan|nick" -> "@" / "+" / ""
 
         # ── Topic cache ──────────────────────────────────────────────────────
         self._topics: Dict[str, str] = {}
@@ -98,6 +109,9 @@ class IRCBridge:
         self._last_reclaim = 0.0
         self._ai_cooldown: Dict[str, float] = {}   # nick(lower) -> ts
         self._ai_last_channel = 0.0
+
+        from utils.moderation import Moderator
+        self.moderator = Moderator(self)
 
 
     # ── Mapping helpers ───────────────────────────────────────────────────────
@@ -167,6 +181,12 @@ class IRCBridge:
             self._nicks.pop(irc_ch.lower(), None)
         return True
 
+    def all_channels(self) -> List[str]:
+        """Bridged channels plus the join-only ones."""
+        with self._map_lock:
+            mapped = list(self._i2d.keys())
+        return list(dict.fromkeys(mapped + sorted(self._extra)))
+
     def list_bridges(self) -> List[Tuple[str, str]]:
         """Return list of (discord_channel, irc_channel) pairs."""
         with self._map_lock:
@@ -224,6 +244,12 @@ class IRCBridge:
         return True
 
     # ── Nick / topic queries ──────────────────────────────────────────────────
+
+    def has_prefix(self, irc_channel: str, nick: str) -> bool:
+        """True if the nick carries an operator-ish prefix in that channel."""
+        with self._nicks_lock:
+            pfx = self._prefixes.get(f"{irc_channel.lower()}|{nick.lower()}", "")
+        return bool(re.search(r"[~&@%]", pfx))
 
     def is_nick_in_channel(self, nick: str, irc_channel: str = "") -> bool:
         ch = (irc_channel or self._default_irc_channel()).lower()
@@ -307,9 +333,7 @@ class IRCBridge:
             self._raw(f"PRIVMSG NickServ :GHOST {config.IRC_NICK} {config.IRC_NICKSERV_PASS}")
             self._raw(f"PRIVMSG NickServ :RELEASE {config.IRC_NICK} {config.IRC_NICKSERV_PASS}")
             self._raw(f"NICK {config.IRC_NICK}")
-            with self._map_lock:
-                channels = list(self._i2d.keys())
-            for ch in channels:
+            for ch in self.all_channels():
                 self._raw(f"JOIN {ch}")
         except Exception as e:  # noqa: BLE001 — recovery must never kill the loop
             print(f"[irc_bridge] Nick reclaim failed: {e}")
@@ -473,9 +497,7 @@ class IRCBridge:
                 time.sleep(0.3)
             self._raw(f"MODE {config.IRC_NICK} +i")   # invisible — fewer unsolicited DMs
             # Re-join ALL mapped IRC channels
-            with self._map_lock:
-                channels = list(self._i2d.keys())
-            for ch in channels:
+            for ch in self.all_channels():
                 self._raw(f"JOIN {ch}")
             self._connected = True
             print(f"[irc_bridge] Connected and joined IRC channels.")
@@ -505,13 +527,48 @@ class IRCBridge:
             self._raw(f"NICK {fallback}")
             return
 
+        # MODE — track +o/-o/+v so has_prefix() stays current between NAMES.
+        m = re.match(r"^:\S+\s+MODE\s+(#\S+)\s+(\S+)\s+(.*)$", line)
+        if m:
+            ch, modes, targets = m.group(1).lower(), m.group(2), m.group(3).split()
+            adding, ti = True, 0
+            for c in modes:
+                if c == "+":
+                    adding = True
+                elif c == "-":
+                    adding = False
+                elif c in "ovhq":
+                    who = targets[ti] if ti < len(targets) else ""
+                    ti += 1
+                    if who:
+                        sym = {"o": "@", "v": "+", "h": "%", "q": "~"}[c]
+                        k = f"{ch}|{who.lower()}"
+                        with self._nicks_lock:
+                            cur = self._prefixes.get(k, "")
+                            self._prefixes[k] = (
+                                cur + sym if adding and sym not in cur
+                                else cur.replace(sym, "") if not adding else cur)
+                elif c in "beIkl":
+                    ti += 1
+            return
+
         # 353 NAMREPLY — populate per-channel nick list
         m = re.match(r"^:\S+\s+353\s+\S+\s+[=@*]\s+(\S+)\s+:(.*)", line)
         if m:
             irc_ch   = m.group(1).lower()
             raw_nicks = m.group(2).split()
-            cleaned  = {n.lstrip("@+%&~") for n in raw_nicks if n.lstrip("@+%&~")}
+            cleaned = set()
             with self._nicks_lock:
+                for raw in raw_nicks:
+                    pfx = (re.match(r"^[~&@%+]+", raw) or [""])[0] if raw else ""
+                    bare = raw.lstrip("@+%&~")
+                    if not bare:
+                        continue
+                    cleaned.add(bare)
+                    # Prefixes are stripped for the nick list but kept here:
+                    # moderation must never act on a channel operator, and
+                    # this is the only place the server tells us who is one.
+                    self._prefixes[f"{irc_ch}|{bare.lower()}"] = pfx
                 self._nicks.setdefault(irc_ch, set()).update(cleaned)
             return
 
@@ -550,6 +607,14 @@ class IRCBridge:
 
             # ── Channel message ──
             if target.startswith("#"):
+                # Auto-moderation first: if Luna acts on a line, it does not
+                # then get answered or relayed.
+                try:
+                    if self.moderator.check_message(target, nick, message):
+                        return
+                except Exception as e:  # noqa: BLE001
+                    print(f"[irc_bridge] moderation error: {e}")
+
                 # "$ai <question>" — and plain "Luna, ..." because nobody in a
                 # chatroom types a command to talk to someone.
                 low = message.lower()
@@ -625,6 +690,11 @@ class IRCBridge:
                 self._nicks.setdefault(ch_low, set()).add(nick)
             if nick.lower() == config.IRC_NICK.lower():
                 self._raw(f"NAMES {channel}")   # populate nick list on own join
+            else:
+                try:
+                    self.moderator.check_join(channel, nick)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[irc_bridge] join check error: {e}")
             return
 
         # PART

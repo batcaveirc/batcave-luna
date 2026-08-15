@@ -48,7 +48,18 @@ jobs:
           IRC_SERVER: ${{ secrets.IRC_SERVER || 'irc.hybridirc.com' }}
           IRC_PORT: ${{ secrets.IRC_PORT || '6697' }}
           IRC_NICK: ${{ secrets.IRC_NICK || 'Luna1' }}
+          # The relayed room. Only this one crosses to Discord.
           IRC_CHANNEL: ${{ secrets.IRC_CHANNEL || '#🅱🅰🆃🅲🅰🆅🅴' }}
+          # Joined and moderated, but NOT relayed. Use $ircjoin in Discord to
+          # start relaying one of these — presence and publication are separate
+          # decisions and the second should always be deliberate.
+          IRC_EXTRA_CHANNELS: ${{ secrets.IRC_EXTRA_CHANNELS || '#batcave' }}
+
+          # Auto-moderation covering the gaps Dracula cannot see. Off unless
+          # turned on with $mod on, or this secret set to "on".
+          LUNA_MOD: ${{ secrets.LUNA_MOD || 'off' }}
+          LUNA_SEVERE_WORDS: ${{ secrets.LUNA_SEVERE_WORDS }}
+          LUNA_WHITELIST_IRC: ${{ secrets.LUNA_WHITELIST_IRC || secrets.WHITELIST }}
 
           # ── Discord side of the bridge ───────────────────────────────────
           BRIDGE_CHANNEL: ${{ secrets.BRIDGE_CHANNEL || '🅱🅰🆃🅲🅰🆅🅴' }}

@@ -6,7 +6,31 @@ Vampire bot does: a job runs for just under 6 hours, a `*/5` cron starts the
 next one as soon as it ends, and `cancel-in-progress: false` keeps exactly one
 alive at a time.
 
-Default room: `#🅱🅰🆃🅲🅰🆅🅴`, as `Luna1`.
+Rooms: she joins `#🅱🅰🆃🅲🅰🆅🅴` and `#batcave` as `Luna1`, but **only the
+emoji room is relayed**. `#batcave` is joined and moderated with nothing
+crossing to Discord — run `$ircjoin #batcave` on the Discord side to start
+relaying it too. Being present and being republished elsewhere are separate
+decisions, and the second one should always be deliberate.
+
+## Auto-moderation
+
+`$mod on|off` (owner only, **off by default**). Dracula is the primary
+moderator in both rooms and already handles profanity, flood, caps, repeats,
+raids and bad nicks. Luna deliberately does **not** repeat any of that — two
+bots kicking one person for one line is worse than either doing it alone. She
+covers what a word list structurally cannot see:
+
+- **disguised text** — Cyrillic and Greek look-alikes, fullwidth forms, and
+  zero-width characters wedged between letters, all folded back to ASCII
+  before checking. This is how a determined person walks past a word filter.
+- **mass highlights** — naming a dozen people at once so every client beeps.
+- **colour-code flooding** — control characters that make a client unreadable.
+- **advertising** — invites to other servers and networks.
+- **walls of text** and **join/part cycling** (one person alone never trips a
+  raid guard, which counts distinct users).
+
+Warn first, kick on the second offence, **never a ban**. Channel operators,
+the other bots and anyone in `LUNA_WHITELIST_IRC` are never touched.
 
 ## Setup
 

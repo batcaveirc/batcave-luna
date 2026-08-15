@@ -3,7 +3,7 @@ Shared command dispatcher for Luna.
 
 Works for BOTH Discord and IRC. Owner/whitelist gated.
 
-Commands: help, ai, ping, roll, flip, choose, calc, weather, nicks, say, diag
+Commands: help, ai, ping, roll, flip, choose, calc, weather, nicks, say, mod
 
 Deliberately short. Canned-list commands (8ball, fact, dadjoke, quote) were
 removed: a fixed list repeats within minutes and stops being funny. batstatus
@@ -39,6 +39,12 @@ OWNER_IDS = {
     int(x) for x in os.getenv("OWNER_IDS", "").replace(" ", "").split(",")
     if x.strip().isdigit()
 }
+
+
+def is_irc_owner(nick: str) -> bool:
+    """Only the configured owners, and never 'everyone' by default — an empty
+    owner list must not mean an open door for a command that kicks people."""
+    return nick.lower() in OWNERS_IRC
 
 
 def is_irc_authorized(nick: str) -> bool:
@@ -216,6 +222,30 @@ class SharedCommands:
             return "IRC channel empty."
         return f"IRC ({len(nicks)}): " + ", ".join(nicks)
 
+    def cmd_mod(self, platform, name, args):
+        """$mod on|off — Luna's auto-moderation.
+
+        Owner-gated: this decides whether people get kicked, so it must not be
+        something any passer-by can flip. Off by default, because a brand-new
+        moderator loose in a live room is how a regular gets thrown out
+        mid-joke.
+        """
+        if platform == "irc" and not is_irc_owner(name):
+            return None
+        mod = getattr(self.bridge, "moderator", None)
+        if mod is None:
+            return "moderation is not loaded."
+        arg = (args or "").strip().lower()
+        if arg in ("on", "enable"):
+            mod.enabled = True
+            return ("auto-moderation ON — I cover what Dracula misses: "
+                    "disguised text, mass pings, colour flooding, adverts, "
+                    "walls of text, join flooding.")
+        if arg in ("off", "disable"):
+            mod.enabled = False
+            return "auto-moderation OFF."
+        return f"auto-moderation is {'ON' if mod.enabled else 'OFF'}."
+
     def cmd_say(self, platform, name, args):
         """Cross-post: from IRC -> Discord, from Discord -> IRC."""
         text = (args or "").strip()
@@ -257,49 +287,6 @@ class SharedCommands:
 
 
 
-    def cmd_diag(self, platform, name, args):
-        """Report what Luna can actually see on the far side of the bridge.
-
-        The picture commands were timing out with no way to tell why: from IRC,
-        "the other bot is not in the channel", "it ignored me" and "it is slow"
-        all look identical. This answers the first one directly.
-        """
-        bot = self.bot
-        if bot is None:
-            return "no Discord connection object — bridge is running standalone."
-
-        lines = []
-        user = getattr(bot, "user", None)
-        lines.append(f"logged in as {user}" if user else "NOT logged in to Discord")
-
-        try:
-            mapping = dict(self.bridge._d2i) if self.bridge else {}
-        except Exception:
-            mapping = {}
-        lines.append("bridges: " + (", ".join(f"#{d}<->{i}" for d, i in mapping.items())
-                                    or "none"))
-
-        target = (getattr(config, "BRIDGE_CHANNEL", "") or "").lower()
-        found = None
-        for guild in getattr(bot, "guilds", []):
-            for ch in getattr(guild, "text_channels", []):
-                if ch.name.lower() == target:
-                    found = ch
-                    break
-        if found is None:
-            lines.append(f"channel '{target}' NOT FOUND in any guild Luna is in")
-            return " | ".join(lines)
-
-        perms = found.permissions_for(found.guild.me) if found.guild.me else None
-        lines.append(f"channel #{found.name}: "
-                     f"send={getattr(perms, 'send_messages', '?')} "
-                     f"read={getattr(perms, 'read_messages', '?')}")
-
-        # The decisive fact: is the bot we are sending commands to even here?
-        bots = [m.name for m in getattr(found, "members", []) if getattr(m, "bot", False)]
-        lines.append(f"bots in that channel ({len(bots)}): "
-                     + (", ".join(bots[:12]) or "NONE — nothing can answer a command"))
-        return " | ".join(lines)
 
     # ── Reminder loop ────────────────────────────────────────────────────
 
