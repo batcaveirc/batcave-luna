@@ -1,0 +1,18 @@
+# Secrets never belong in this repo — it is public. All config comes from
+# GitHub Actions secrets (see .github/workflows/luna.yml).
+.env
+.env.*
+!.env.template
+
+# Runtime state: chat memory, logs, caches. Committing any of these would
+# publish what people said in the room.
+data/
+*.db
+*.log
+__pycache__/
+*.py[cod]
+
+# Replit / local editor leftovers
+.replit
+replit.nix
+.DS_Store
