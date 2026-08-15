@@ -33,6 +33,33 @@ In Discord: `!!ircjoin #channel` maps the current Discord channel to an IRC
 channel, `!!ircpart` unmaps it, `!!ircbridges` lists the mappings,
 `!!ircinfo` / `!!ircping` report status.
 
+## notsobot from IRC
+
+Anyone in the bridged IRC channel can drive notsobot using the same syntax it
+uses in Discord:
+
+```
+.img black cat
+.magik https://example.com/photo.png
+.luna                 ← lists every command that works
+```
+
+Luna types the command into the Discord channel, waits for notsobot's reply,
+and relays the resulting image URL back to IRC. `!img` also works, for muscle
+memory. Image commands like `.edit` and `.magik` need something to work on, so
+pass an image URL — an IRC user has nothing to attach.
+
+**Only image and text toys are forwarded, never moderation.** The list is an
+allowlist (`_NOTSOBOT_DEFAULT_CMDS` in `utils/irc_bridge.py`); without one,
+anybody in the IRC room could make Luna run `.ban` or `.purge` in Discord under
+her own permissions. Add new commands with the `NOTSOBOT_EXTRA_CMDS` secret
+(comma-separated) — a hardcoded denylist of destructive verbs still applies, so
+a typo there cannot open that door.
+
+Guards: 8s per person between requests, 4 in flight per channel, and a request
+that goes unanswered for 60s says so in the room instead of leaving a "fetching
+…" hanging forever.
+
 ## What this repo deliberately does not contain
 
 This repository is **public** — that is what makes the Actions minutes free —

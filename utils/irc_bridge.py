@@ -8,6 +8,7 @@ Discord commands (~prefix) are suppressed from IRC relay.
 """
 
 import asyncio
+import os
 import re
 import socket
 import ssl
@@ -32,16 +33,57 @@ _SEND_DELAY          = 0.5   # seconds between outbound IRC messages (rate-limit
 # ── Notsobot command map: IRC trigger → Discord command prefix ────────────────
 # IRC user types: !img search cats   → Luna sends: .img search cats  to Discord
 # Notsobot replies in Discord → Luna relays the image URL back to IRC
-_NOTSOBOT_CMDS: Dict[str, str] = {
-    "!img":       ".img",
-    "!edit":      ".edit",
-    "!triggered": ".triggered",
-    "!beautiful": ".beautiful",
-    "!blurpify":  ".blurpify",
-    "!pixel":     ".pixel",
-    "!magik":     ".magik",
-}
-_NOTSOBOT_PENDING_TTL = 30   # seconds to wait for notsobot's response
+# IRC user types: .img cats  → Luna sends ".img cats" into the bridged Discord
+# channel → notsobot answers there → Luna relays the image URL back to IRC.
+#
+# "." is the primary prefix because it is what notsobot actually uses, so the
+# command reads the same in both rooms. "!" stays as an alias for muscle
+# memory. Neither collides with the other bots in these channels (Vampire uses
+# "!" with its own verbs, Dracula uses "!!").
+_NOTSOBOT_PREFIXES = (".", "!")
+
+# ALLOWLIST, and it must stay one. Without it, anyone in the IRC room could
+# make Luna type an arbitrary command at any Discord bot — ".ban", ".purge",
+# ".settings" — using Luna's own Discord permissions. Everything here is an
+# image/text toy that cannot change state.
+_NOTSOBOT_DEFAULT_CMDS = frozenset({
+    # search / fetch
+    "img", "image", "gif", "ocr", "google", "youtube", "urban", "translate",
+    # the classics
+    "edit", "magik", "pixel", "triggered", "beautiful", "blurpify", "deepfry",
+    "jpeg", "invert", "grayscale", "blur", "sharpen", "glitch", "explode",
+    "implode", "swirl", "rotate", "flip", "flop", "resize", "caption", "meme",
+    "ascii", "emojify", "wall", "tile", "mirror", "spin", "zoom", "circle",
+    "distort", "fisheye", "legofy", "paint", "posterize", "sepia", "sketch",
+    "solarize", "tint", "vaporwave", "wave", "wiggle", "rain", "snow",
+})
+
+# Verbs that must never be forwarded even if someone adds them to
+# NOTSOBOT_EXTRA_CMDS by mistake. A denylist behind an allowlist is belt and
+# braces, and the cost of being wrong here is somebody's Discord server.
+_NOTSOBOT_FORBIDDEN = frozenset({
+    "ban", "unban", "softban", "kick", "mute", "unmute", "purge", "prune",
+    "clear", "delete", "remove", "role", "roles", "nick", "settings", "set",
+    "prefix", "config", "admin", "owner", "eval", "exec", "shell", "sudo",
+    "say", "echo", "dm", "pm", "invite", "leave", "shutdown", "restart",
+})
+
+
+def _allowed_notsobot_cmds() -> frozenset:
+    """Allowlist plus anything the owner added via NOTSOBOT_EXTRA_CMDS, minus
+    anything on the denylist. Env-extensible so a new notsobot toy does not
+    need a code change."""
+    extra = {
+        c.strip().lower().lstrip(".!")
+        for c in os.getenv("NOTSOBOT_EXTRA_CMDS", "").split(",")
+        if c.strip()
+    }
+    return frozenset((_NOTSOBOT_DEFAULT_CMDS | extra) - _NOTSOBOT_FORBIDDEN)
+
+
+_NOTSOBOT_PENDING_TTL = 60   # image edits are slow; 30s was timing out
+_NOTSOBOT_COOLDOWN    = 8    # seconds between requests from one nick
+_NOTSOBOT_MAX_PENDING = 4    # concurrent requests per channel
 
 
 class IRCBridge:
@@ -85,9 +127,13 @@ class IRCBridge:
         self._send_lock = threading.Lock()
 
         # ── Notsobot pending requests ────────────────────────────────────────
-        # disc_ch_lower → {"irc_ch": str, "nick": str, "cmd": str, "ts": float}
-        self._pending_notsobot: Dict[str, dict] = {}
+        # A DEQUE per channel, not one slot: two people asking at once used to
+        # mean the second request silently replaced the first, and whoever
+        # asked first never got an answer.
+        # disc_ch_lower → deque[{"irc_ch", "nick", "cmd", "ts"}]
+        self._pending_notsobot: Dict[str, deque] = {}
         self._notsobot_lock = threading.Lock()
+        self._notsobot_cooldown: Dict[str, float] = {}   # nick(lower) → ts
 
         # ── Brawl game hook ───────────────────────────────────────────────────
         # Set by luna.py after BrawlGame is created so IRC !! commands reach it.
@@ -275,10 +321,18 @@ class IRCBridge:
 
     def _sender_loop(self):
         """Drain the send queue at _SEND_DELAY intervals (rate-limiting)."""
+        last_sweep = 0.0
         while self._running:
             time.sleep(_SEND_DELAY)
             if not self._connected:
                 continue
+            # Piggyback the notsobot timeout check on the tick that already runs.
+            if time.time() - last_sweep > 5:
+                last_sweep = time.time()
+                try:
+                    self._sweep_notsobot_timeouts()
+                except Exception as e:
+                    print(f"[irc_bridge] notsobot sweep error: {e}")
             with self._send_lock:
                 if not self._send_q:
                     continue
@@ -524,28 +578,54 @@ class IRCBridge:
         parts = message.strip().split()
         if not parts:
             return False
-        cmd_key = parts[0].lower()
-        discord_prefix = _NOTSOBOT_CMDS.get(cmd_key)
-        if discord_prefix is None:
+        raw = parts[0]
+        if not raw.startswith(_NOTSOBOT_PREFIXES) or len(raw) < 2:
             return False
+        verb = raw[1:].lower()
 
-        args = " ".join(parts[1:])
-        discord_cmd = f"{discord_prefix} {args}".strip()
+        # ".luna" lists what is available, so nobody has to guess.
+        if verb in ("luna", "cmds", "commands"):
+            allowed = sorted(_allowed_notsobot_cmds())
+            self._queue(irc_ch,
+                f"\x0313:discord:\x03 {nick}: try \x02.img cats\x02 or "
+                f"\x02.magik <image url>\x02 — {len(allowed)} commands: "
+                + ", ".join(allowed[:40]))
+            return True
 
-        # Register pending so on_message can match the response
+        if verb not in _allowed_notsobot_cmds():
+            return False          # not ours — fall through to the normal relay
+
+        now = time.time()
+        nkey = nick.lower()
+
         with self._notsobot_lock:
-            # Purge stale entries first
-            now = time.time()
-            stale = [k for k, v in self._pending_notsobot.items()
-                     if now - v["ts"] > _NOTSOBOT_PENDING_TTL]
-            for k in stale:
-                del self._pending_notsobot[k]
-            self._pending_notsobot[disc_ch.lower()] = {
+            # Drop anything that timed out (the sweeper reports those).
+            for ch, q in list(self._pending_notsobot.items()):
+                while q and now - q[0]["ts"] > _NOTSOBOT_PENDING_TTL:
+                    q.popleft()
+                if not q:
+                    del self._pending_notsobot[ch]
+
+            last = self._notsobot_cooldown.get(nkey, 0.0)
+            if now - last < _NOTSOBOT_COOLDOWN:
+                wait = int(_NOTSOBOT_COOLDOWN - (now - last)) + 1
+                self._queue(irc_ch, f"{nick}: easy — {wait}s.")
+                return True
+
+            q = self._pending_notsobot.setdefault(disc_ch.lower(), deque())
+            if len(q) >= _NOTSOBOT_MAX_PENDING:
+                self._queue(irc_ch, f"{nick}: too many in flight, try again shortly.")
+                return True
+
+            args = " ".join(parts[1:])
+            discord_cmd = f".{verb} {args}".strip()
+            q.append({
                 "irc_ch": irc_ch,
                 "nick":   nick,
                 "cmd":    discord_cmd,
                 "ts":     now,
-            }
+            })
+            self._notsobot_cooldown[nkey] = now
 
         # Announce to IRC immediately
         self._queue(irc_ch,
@@ -555,6 +635,22 @@ class IRCBridge:
         self._relay_to_discord(discord_cmd, discord_channel=disc_ch)
         print(f"[irc_bridge] notsobot → Discord [{disc_ch}]: {discord_cmd}")
         return True
+
+    def _sweep_notsobot_timeouts(self) -> None:
+        """Tell IRC when a request got no answer. Without this the room just
+        sees 'fetching …' and nothing ever again, which reads as a dead bot."""
+        now = time.time()
+        expired: List[dict] = []
+        with self._notsobot_lock:
+            for ch, q in list(self._pending_notsobot.items()):
+                while q and now - q[0]["ts"] > _NOTSOBOT_PENDING_TTL:
+                    expired.append(q.popleft())
+                if not q:
+                    del self._pending_notsobot[ch]
+        for p in expired:
+            self._queue(p["irc_ch"],
+                f"\x0313:discord:\x03 {p['nick']}: no answer for "
+                f"\x02{p['cmd']}\x02 — it may need an image URL.")
 
     async def handle_notsobot_response(self, message) -> bool:
         """
@@ -573,12 +669,13 @@ class IRCBridge:
         disc_ch = getattr(message.channel, "name", "").lower()
 
         with self._notsobot_lock:
-            pending = self._pending_notsobot.get(disc_ch)
-            if not pending:
+            q = self._pending_notsobot.get(disc_ch)
+            while q and time.time() - q[0]["ts"] > _NOTSOBOT_PENDING_TTL:
+                q.popleft()                       # the sweeper announces these
+            if not q:
+                self._pending_notsobot.pop(disc_ch, None)
                 return False
-            if time.time() - pending["ts"] > _NOTSOBOT_PENDING_TTL:
-                del self._pending_notsobot[disc_ch]
-                return False
+            pending = q[0]
 
             # Determine if this message carries image content
             has_attachment = bool(message.attachments)
@@ -592,10 +689,12 @@ class IRCBridge:
             if not (has_attachment or has_image_embed or has_url_in_text):
                 return False   # not the result yet — keep pending
 
-            # Consume the pending entry
+            # Consume the oldest pending entry — answers come back in order.
             irc_ch   = pending["irc_ch"]
             req_nick = pending["nick"]
-            del self._pending_notsobot[disc_ch]
+            q.popleft()
+            if not q:
+                self._pending_notsobot.pop(disc_ch, None)
 
         # Build the IRC relay text
         parts: List[str] = []
