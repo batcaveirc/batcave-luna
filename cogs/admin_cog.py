@@ -159,174 +159,15 @@ class AdminCog(commands.Cog, name="Admin"):
 
     # ── Discord mod commands ──────────────────────────────────────────────────
 
-    @commands.command(name="kick")
-    @mod_only()
-    async def kick_member(self, ctx: commands.Context, member: discord.Member, *, reason: str = "No reason given"):
-        """Kick a member from the Discord server."""
-        if member.top_role >= ctx.author.top_role and not ctx.author.guild_permissions.administrator:
-            await ctx.send("🚫 You can't kick someone with an equal or higher role.")
-            return
-        try:
-            await member.kick(reason=f"{reason} (by {ctx.author})")
-            em = discord.Embed(
-                title       = "👢 Kicked",
-                description = f"**{member}** has been kicked from the cave.",
-                color       = 0xFF6600,
-            )
-            em.add_field(name="Reason", value=reason)
-            em.add_field(name="By",     value=ctx.author.mention)
-            await ctx.send(embed=em)
-        except discord.Forbidden:
-            await ctx.send("❌ I don't have permission to kick that user.")
 
-    @commands.command(name="ban")
-    @mod_only()
-    async def ban_member(self, ctx: commands.Context, member: discord.Member, *, reason: str = "No reason given"):
-        """Permanently ban a member from the Discord server."""
-        if member.top_role >= ctx.author.top_role and not ctx.author.guild_permissions.administrator:
-            await ctx.send("🚫 You can't ban someone with an equal or higher role.")
-            return
-        try:
-            await member.ban(reason=f"{reason} (by {ctx.author})", delete_message_days=1)
-            em = discord.Embed(
-                title       = "🔨 Banned",
-                description = f"**{member}** has been banished from the cave. 🌑",
-                color       = 0xFF0000,
-            )
-            em.add_field(name="Reason", value=reason)
-            em.add_field(name="By",     value=ctx.author.mention)
-            await ctx.send(embed=em)
-        except discord.Forbidden:
-            await ctx.send("❌ I don't have permission to ban that user.")
 
-    @commands.command(name="unban")
-    @mod_only()
-    async def unban_member(self, ctx: commands.Context, user_id: int, *, reason: str = "Forgiven"):
-        """Unban a user by their Discord ID. Usage: !!unban 123456789"""
-        try:
-            user = await self.bot.fetch_user(user_id)
-            await ctx.guild.unban(user, reason=f"{reason} (by {ctx.author})")
-            await ctx.send(f"✅ **{user}** has been unbanned. The moon forgives... this time.")
-        except discord.NotFound:
-            await ctx.send("❌ That user ID wasn't found in the ban list.")
-        except discord.Forbidden:
-            await ctx.send("❌ I don't have permission to unban users.")
 
-    @commands.command(name="mute", aliases=["timeout"])
-    @mod_only()
-    async def mute_member(self, ctx: commands.Context, member: discord.Member, minutes: int = 10, *, reason: str = "No reason given"):
-        """Timeout a member. Usage: !!mute @user 30 spamming"""
-        if minutes < 1 or minutes > 40320:   # Discord max: 28 days
-            await ctx.send("❌ Duration must be between 1 and 40320 minutes (28 days).")
-            return
-        until = discord.utils.utcnow() + datetime.timedelta(minutes=minutes)
-        try:
-            await member.timeout(until, reason=f"{reason} (by {ctx.author})")
-            em = discord.Embed(
-                title       = "🔇 Muted",
-                description = f"**{member.mention}** has been silenced for {minutes} minute(s). 🌑",
-                color       = 0xAA00FF,
-            )
-            em.add_field(name="Reason",    value=reason)
-            em.add_field(name="Duration",  value=f"{minutes} min")
-            em.add_field(name="By",        value=ctx.author.mention)
-            await ctx.send(embed=em)
-        except discord.Forbidden:
-            await ctx.send("❌ I don't have permission to timeout that user.")
 
-    @commands.command(name="unmute", aliases=["untimeout"])
-    @mod_only()
-    async def unmute_member(self, ctx: commands.Context, member: discord.Member):
-        """Remove a timeout from a member."""
-        try:
-            await member.timeout(None)
-            await ctx.send(f"🔈 **{member.mention}** has been unmuted. The moon is merciful.")
-        except discord.Forbidden:
-            await ctx.send("❌ I don't have permission to remove that timeout.")
 
-    @commands.command(name="warn")
-    @mod_only()
-    async def warn_member(self, ctx: commands.Context, member: discord.Member, *, reason: str):
-        """Warn a member. Sends them a DM and logs it."""
-        count = _add_warning(ctx.guild.id, member.id, reason, str(ctx.author))
 
-        # Try to DM the user
-        try:
-            dm_em = discord.Embed(
-                title       = "⚠️ Warning — BatCave",
-                description = f"You have been warned in **{ctx.guild.name}**.",
-                color       = 0xFFAA00,
-            )
-            dm_em.add_field(name="Reason",        value=reason)
-            dm_em.add_field(name="Total Warnings", value=str(count))
-            await member.send(embed=dm_em)
-            dm_sent = "DM sent ✅"
-        except discord.Forbidden:
-            dm_sent = "DM blocked ❌"
 
-        em = discord.Embed(
-            title       = f"⚠️ Warning #{count}",
-            description = f"**{member.mention}** has been warned.",
-            color       = 0xFFAA00,
-        )
-        em.add_field(name="Reason",        value=reason)
-        em.add_field(name="Total Warnings", value=str(count))
-        em.add_field(name="By",            value=ctx.author.mention)
-        em.add_field(name="DM",            value=dm_sent)
-        await ctx.send(embed=em)
 
-    @commands.command(name="warnings", aliases=["warns"])
-    @mod_only()
-    async def show_warnings(self, ctx: commands.Context, member: discord.Member):
-        """Show all warnings for a member."""
-        warns = _get_warnings(ctx.guild.id, member.id)
-        if not warns:
-            await ctx.send(f"✅ **{member}** has no warnings. A rare and pure soul.")
-            return
-        em = discord.Embed(
-            title = f"⚠️ Warnings for {member}",
-            color = 0xFFAA00,
-        )
-        for i, w in enumerate(warns, 1):
-            em.add_field(
-                name  = f"#{i} — {w['at'][:10]}",
-                value = f"**{w['reason']}** (by {w['by']})",
-                inline=False,
-            )
-        await ctx.send(embed=em)
 
-    @commands.command(name="clearwarn", aliases=["clearwarnings"])
-    @mod_only()
-    async def clear_warnings(self, ctx: commands.Context, member: discord.Member):
-        """Clear all warnings for a member."""
-        _clear_warnings(ctx.guild.id, member.id)
-        await ctx.send(f"🧹 All warnings cleared for **{member}**. Fresh start, dark soul.")
-
-    @commands.command(name="purge", aliases=["deletemsg"])
-    @mod_only()
-    async def purge_messages(self, ctx: commands.Context, count: int = 10):
-        """Delete the last N messages in this channel (max 100)."""
-        if count < 1 or count > 100:
-            await ctx.send("❌ Count must be between 1 and 100.")
-            return
-        await ctx.message.delete()
-        deleted = await ctx.channel.purge(limit=count)
-        msg = await ctx.send(f"🧹 Swept away {len(deleted)} message(s) into the void.")
-        await asyncio.sleep(3)
-        await msg.delete()
-
-    @commands.command(name="slowmode")
-    @mod_only()
-    async def slowmode(self, ctx: commands.Context, seconds: int = 0):
-        """Set channel slowmode. 0 to disable. Usage: !!slowmode 10"""
-        if seconds < 0 or seconds > 21600:
-            await ctx.send("❌ Slowmode must be between 0 and 21600 seconds.")
-            return
-        await ctx.channel.edit(slowmode_delay=seconds)
-        if seconds == 0:
-            await ctx.send("⚡ Slowmode disabled. Chaos can resume.")
-        else:
-            await ctx.send(f"🐢 Slowmode set to **{seconds}s** in this channel.")
 
     # ── IRC mod commands ──────────────────────────────────────────────────────
 
@@ -437,7 +278,7 @@ class AdminCog(commands.Cog, name="Admin"):
                 f"🟢 IRC connected | Discord latency: **{latency_ms}ms**"
             )
         else:
-            await ctx.send("🔴 Not connected to IRC. Try `!!ircreconnect`.")
+            await ctx.send(f"🔴 Not connected to IRC. Try `{config.PREFIX}ircreconnect`.")
 
     @commands.command(name="ircinfo")
     async def irc_info(self, ctx: commands.Context):
@@ -494,7 +335,7 @@ class AdminCog(commands.Cog, name="Admin"):
     @commands.command(name="ircraw")
     @commands.is_owner()
     async def irc_raw(self, ctx: commands.Context, *, command: str):
-        """Send a raw IRC command (owner only). Example: !!ircraw MODE #BatCave +m"""
+        ""f"Send a raw IRC command (owner only). Example: {config.PREFIX}ircraw MODE #BatCave +m"""
         if not self._bridge:
             await ctx.send("❌ IRC bridge not running.")
             return

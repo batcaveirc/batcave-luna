@@ -121,10 +121,16 @@ class SharedCommands:
     # ── Dispatch entry points ────────────────────────────────────────────
 
     def dispatch_irc(self, nick: str, text: str) -> Optional[str]:
-        """Parse !!cmd from IRC PRIVMSG. Returns reply text or None."""
-        if not text.startswith("!!"):
+        """Parse a prefixed command from an IRC PRIVMSG. Reply text or None.
+
+        The prefix comes from config: hardcoding it here meant every command
+        silently stopped working the moment the prefix changed, with no error
+        anywhere — the bot simply ignored people.
+        """
+        pfx = config.PREFIX
+        if not text.startswith(pfx):
             return None
-        parts = text[2:].split(None, 1)
+        parts = text[len(pfx):].split(None, 1)
         if not parts:
             return None
         cmd = parts[0].lower()
@@ -159,37 +165,50 @@ class SharedCommands:
         return f"pong! ({platform})"
 
     def cmd_help(self, platform, name, args):
+        """Everything Luna answers to, with the live prefix baked in.
+
+        Kept short and split by topic: this is read in a chat window, often on
+        a phone, where a long block scrolls the conversation away.
+        """
+        p = config.PREFIX
         sub = (args or "").strip().lower()
-        # No "ai" topic: Luna is a relay bot here and the persona/memory
-        # commands were removed with the AI module they depended on.
         if sub in ("fun", "games"):
             return (
-                "[\x02Fun\x02] "
-                "!!8ball <q> — ask the oracle | "
-                "!!roll [NdN] — roll dice (default 1d6) | "
-                "!!flip — heads or tails | "
-                "!!choose a, b, c — Luna decides | "
-                "!!fact — random weird fact | "
-                "!!dadjoke — prepare yourself | "
-                "!!quote — inspirational quote | "
-                "!!weather [city] — quick forecast"
+                f"[\x02Fun\x02] {p}8ball <q> · {p}roll [NdN] · {p}flip · "
+                f"{p}choose a, b, c · {p}fact · {p}dadjoke · {p}quote · "
+                f"{p}weather [city] · {p}calc 2+2"
             )
         if sub in ("irc", "bridge"):
             return (
-                "[\x02IRC/Bridge\x02] "
-                "!!ping — latency check | "
-                "!!nicks — who's in IRC | "
-                "!!say <msg> — cross-post Discord↔IRC | "
-                "!!remind Nm <task> — set a reminder (max 24h) | "
-                "!!batstatus — check if Vampire/BatBot is alive"
+                f"[\x02Bridge\x02] {p}ping · {p}nicks who is here · "
+                f"{p}say <msg> cross-post · {p}remind 10m <task> · {p}batstatus"
             )
-        # default: full index
+        if sub in ("all", "full", "list"):
+            # The picture commands live in the bridge's allowlist; import it
+            # lazily so the two modules don't import each other at load time.
+            try:
+                from utils.irc_bridge import _allowed_notsobot_cmds
+                every = ", ".join(sorted(_allowed_notsobot_cmds()))
+            except Exception:
+                every = "(unavailable)"
+            return f"[\x02All pictures/search\x02] {every}"
+        if sub in ("img", "image", "pics"):
+            return (
+                f"[\x02Pictures\x02] {p}img <words> · {p}magik <url> · "
+                f"{p}edit <url> · {p}deepfry <url> · {p}caption <url> <text> — "
+                f"{p}help all for every one"
+            )
+        # The first line states what Luna is. HybridIRC's relay policy asks
+        # that relay bots be clearly identified and that users know their
+        # messages leave the channel — and it is simply fair warning.
         return (
-            "\x02Luna commands (prefix !!)\x02  "
-            "— Fun: !!8ball !!roll !!flip !!choose !!fact !!dadjoke !!quote !!weather  "
-            "— Util: !!ping !!nicks !!say !!remind !!batstatus  "
-            "— From IRC: .img .magik .edit … (.luna lists them)  "
-            "— Topics: !!help fun  !!help irc"
+            f"\x02Luna\x02 — I bridge this room to a linked room elsewhere; "
+            f"what you type here is relayed, and replies come back tagged. "
+            f"(prefix \x02{p}\x02) — "
+            f"Fun: {p}8ball {p}roll {p}flip {p}choose {p}fact {p}dadjoke {p}quote {p}weather · "
+            f"Bridge: {p}ping {p}nicks {p}say {p}remind {p}batstatus · "
+            f"Pictures: {p}img {p}magik {p}edit · "
+            f"More: {p}help fun | {p}help bridge | {p}help img | {p}help all"
         )
 
     def cmd_8ball(self, platform, name, args):
@@ -201,7 +220,7 @@ class SharedCommands:
         expr = (args or "1d6").strip()
         m = re.match(r"^(\d+)d(\d+)$", expr)
         if not m:
-            return "Usage: !!roll 2d6"
+            return f"Usage: {config.PREFIX}roll 2d6"
         count, sides = int(m.group(1)), int(m.group(2))
         if count <= 0 or sides <= 0 or count > 20 or sides > 1000:
             return "Limits: 1-20 dice, 1-1000 sides."
@@ -211,7 +230,7 @@ class SharedCommands:
     def cmd_calc(self, platform, name, args):
         expr = (args or "").strip()
         if not expr:
-            return "Usage: !!calc 2+2"
+            return f"Usage: {config.PREFIX}calc 2+2"
         if not re.match(r"^[0-9+\-*/().\s]+$", expr):
             return "Only numbers and + - * / ( ) allowed."
         try:
@@ -232,7 +251,7 @@ class SharedCommands:
     def cmd_choose(self, platform, name, args):
         options = [x.strip() for x in (args or "").split(",") if x.strip()]
         if len(options) < 2:
-            return "Usage: !!choose a, b, c"
+            return f"Usage: {config.PREFIX}choose a, b, c"
         return f"I choose: {random.choice(options)}"
 
     def cmd_flip(self, platform, name, args):
@@ -260,7 +279,7 @@ class SharedCommands:
         """Cross-post: from IRC -> Discord, from Discord -> IRC."""
         text = (args or "").strip()
         if not text:
-            return "Usage: !!say <message>"
+            return f"Usage: {config.PREFIX}say <message>"
         text = text[:300]
         if platform == "irc":
             if self.bridge and self.bridge.loop and self.bridge.loop.is_running():
@@ -290,7 +309,7 @@ class SharedCommands:
     def cmd_remind(self, platform, name, args):
         m = re.match(r"^(\d+)([mh])\s+(.+)$", (args or "").strip())
         if not m:
-            return "Usage: !!remind 10m take pizza out"
+            return f"Usage: {config.PREFIX}remind 10m take pizza out"
         n, unit, text = int(m.group(1)), m.group(2), m.group(3)
         secs = n * (60 if unit == "m" else 3600)
         if secs > 86400:

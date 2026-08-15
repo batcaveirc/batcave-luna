@@ -217,7 +217,7 @@ async def on_command_error(ctx, error):
         await ctx.send("🚫 You don't have permission to use that command.")
         return
     if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(f"❌ Missing argument. Check `!!help`.")
+        await ctx.send(f"❌ Missing argument. Check `{config.PREFIX}help`.")
         return
     print(f"[luna] Command error in {ctx.command}: {error}")
 
@@ -227,45 +227,49 @@ async def on_command_error(ctx, error):
 @bot.command(name="help", aliases=["h", "commands"])
 async def help_cmd(ctx):
     """Show all available commands."""
+    p = config.PREFIX
     em = discord.Embed(
-        title       = "🌉 Luna — IRC Relay Bot",
-        description = "Luna bridges Discord channels to IRC channels.",
+        title       = "🌉 Luna — relay",
+        description = (
+            "Luna carries this channel to a linked IRC room and back. "
+            "Anything said in a bridged channel crosses over."
+        ),
         color       = config.BOT_COLOR,
     )
     em.add_field(
-        name  = "📡 Bridge Status",
-        value = "`!!ircping` `!!ircinfo` `!!ircbridges`",
+        name  = "🌉 The bridge",
+        value = f"`{p}ircping` `{p}ircinfo` `{p}ircbridges` — status\n"
+                f"`{p}ircjoin #irc [#discord]` — bridge a channel *(mod)*\n"
+                f"`{p}ircleave #irc` — remove a bridge *(mod)*\n"
+                f"`{p}ircnicks [#irc]` · `{p}irctopic [#irc]` — who/what is there",
         inline=False,
     )
     em.add_field(
-        name  = "🌉 Bridge Management  *(mod)*",
-        value = "`!!ircjoin #irc [#discord]` — bridge a channel\n"
-                "`!!ircleave #irc` — remove bridge\n"
-                "`!!ircnicks [#irc]` — who's in IRC\n"
-                "`!!irctopic [#irc]` — show IRC topic",
+        name  = "🔧 IRC control *(mod)*",
+        value = f"`{p}ircnick <nick>` · `{p}ircreconnect` · "
+                f"`{p}irckick <nick>` · `{p}ircban <nick>`\n"
+                f"`{p}ircraw <cmd>` — raw IRC *(owner)*",
         inline=False,
     )
     em.add_field(
-        name  = "🔧 IRC Control  *(mod)*",
-        value = "`!!ircnick <nick>` — change Luna's IRC nick\n"
-                "`!!ircreconnect` — force IRC reconnect\n"
-                "`!!irckick <nick>` — kick from IRC\n"
-                "`!!ircban <nick>` — ban from IRC\n"
-                "`!!ircraw <cmd>` — raw IRC command *(owner)*",
+        name  = "🎭 Everyday",
+        value = f"`{p}ai <question>` — ask Luna\n"
+                f"`{p}8ball` `{p}roll` `{p}flip` `{p}choose` `{p}fact` "
+                f"`{p}dadjoke` `{p}quote` `{p}weather`\n"
+                f"`{p}ping` `{p}about` `{p}batstatus` `{p}help`",
         inline=False,
     )
     em.add_field(
-        name  = "🛡️ Discord Moderation  *(mod)*",
-        value = "`!!kick` `!!ban` `!!unban` `!!mute` `!!unmute`\n"
-                "`!!warn` `!!warnings` `!!clearwarn` `!!purge` `!!slowmode`",
+        name  = "🖼️ From the IRC side",
+        value = f"IRC users type `{p}img cats`, `{p}magik <url>` and friends; "
+                f"Luna runs them here and carries the result back. "
+                f"`{p}help all` lists every one.",
         inline=False,
     )
-    em.add_field(
-        name  = "📊 Misc",
-        value = "`!!ping` `!!about` `!!batstatus`",
-        inline=False,
-    )
-    em.set_footer(text=f"Prefix: {config.PREFIX}  |  Pure relay — no AI, no games.")
+    # Discord moderation was removed: Discord does all of it natively, with an
+    # audit log, and a relay bot reimplementing it is a second place to get
+    # bans wrong.
+    em.set_footer(text=f"Prefix: {p}  |  A relay, not a moderator.")
     await ctx.send(embed=em)
 
 
@@ -279,13 +283,13 @@ async def about(ctx):
             "She bridges Discord channels to IRC channels — "
             "everything said in a bridged Discord channel appears in IRC, "
             "and vice versa.\n\n"
-            "Use `!!ircjoin #ircchannel` to activate a bridge in any Discord channel."
+            f"Use `{config.PREFIX}ircjoin #ircchannel` to activate a bridge in any Discord channel."
         ),
         color=config.BOT_COLOR,
     )
     em.add_field(name="Prefix",  value=config.PREFIX,              inline=True)
     em.add_field(name="IRC",     value=config.IRC_SERVER,          inline=True)
-    em.add_field(name="Help",    value="`!!help`",                 inline=True)
+    em.add_field(name="Help",    value=f"`{config.PREFIX}help`",                 inline=True)
     em.set_footer(text="Relay bot — always listening, never talking. 🌉")
     await ctx.send(embed=em)
 

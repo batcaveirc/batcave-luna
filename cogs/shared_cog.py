@@ -8,6 +8,8 @@ Example: !!s ping, !!s roll 2d6, !!s 8ball will I finish my project?
 
 from discord.ext import commands
 
+import config
+
 from shared_cmds import SharedCommands, is_discord_authorized
 
 
@@ -30,10 +32,10 @@ class SharedCog(commands.Cog):
         query = (query or "").strip()
         if not query:
             await ctx.send(
-                "Usage: `!!s <cmd>`\n"
+                f"Usage: `{config.PREFIX}s <cmd>`\n"
                 "Commands: ping, help, 8ball, roll, calc, fact, dadjoke, "
                 "quote, choose, flip, weather, nicks, say, remind, batstatus\n"
-                "Example: `!!s roll 2d6`"
+                f"Example: `{config.PREFIX}s roll 2d6`"
             )
             return
 

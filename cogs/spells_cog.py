@@ -106,7 +106,7 @@ class SpellsCog(commands.Cog, name="Spells"):
     async def spell(self, ctx, target: discord.Member = None):
         """Cast a mystical spell on someone. ~spell @user"""
         if not target:
-            await ctx.send("*Luna tilts her head.* Who are you casting on, darling? `!!spell @user`")
+            await ctx.send(f"*Luna tilts her head.* Who are you casting on, darling? `{config.PREFIX}spell @user`")
             return
         await self._spell_embed(ctx, target, "spell", SPELLS, 0x9B59B6, "✨")
 
@@ -114,7 +114,7 @@ class SpellsCog(commands.Cog, name="Spells"):
     async def hex(self, ctx, target: discord.Member = None):
         """Hex someone with bad luck. ~hex @user"""
         if not target:
-            await ctx.send("*Luna smirks.* Name your target. `!!hex @user`")
+            await ctx.send(f"*Luna smirks.* Name your target. `{config.PREFIX}hex @user`")
             return
         await self._spell_embed(ctx, target, "hex", HEXES, 0x2C3E50, "🖤")
 
@@ -122,7 +122,7 @@ class SpellsCog(commands.Cog, name="Spells"):
     async def bless(self, ctx, target: discord.Member = None):
         """Bless someone with good fortune. ~bless @user"""
         if not target:
-            await ctx.send("*Luna softens.* Who deserves a blessing? `!!bless @user`")
+            await ctx.send(f"*Luna softens.* Who deserves a blessing? `{config.PREFIX}bless @user`")
             return
         await self._spell_embed(ctx, target, "bless", BLESSINGS, 0xF1C40F, "🌟")
 
@@ -130,7 +130,7 @@ class SpellsCog(commands.Cog, name="Spells"):
     async def charm(self, ctx, target: discord.Member = None):
         """Cast an allure charm on someone. ~charm @user"""
         if not target:
-            await ctx.send("*Luna raises an eyebrow.* Who needs more charm? `!!charm @user`")
+            await ctx.send(f"*Luna raises an eyebrow.* Who needs more charm? `{config.PREFIX}charm @user`")
             return
         await self._spell_embed(ctx, target, "charm", CHARMS, 0xE91E8C, "💋")
 
@@ -154,11 +154,11 @@ class SpellsCog(commands.Cog, name="Spells"):
             description = "*She opens the ancient tome, her fingers tracing the ink...*",
             color       = config.BOT_COLOR,
         )
-        em.add_field(name="✨ `!!spell @user`",  value="Mystical effect — unpredictable", inline=True)
-        em.add_field(name="🖤 `!!hex @user`",    value="Bad luck curse — petty chaos",   inline=True)
-        em.add_field(name="🌟 `!!bless @user`",  value="Good fortune — warmth & grace",  inline=True)
-        em.add_field(name="💋 `!!charm @user`",  value="Allure charm — magnetic energy", inline=True)
-        em.add_field(name="🖤 `!!selfhex`",       value="Hex yourself — you unhinged legend", inline=True)
+        em.add_field(name=f"✨ `{config.PREFIX}spell @user`",  value="Mystical effect — unpredictable", inline=True)
+        em.add_field(name=f"🖤 `{config.PREFIX}hex @user`",    value="Bad luck curse — petty chaos",   inline=True)
+        em.add_field(name=f"🌟 `{config.PREFIX}bless @user`",  value="Good fortune — warmth & grace",  inline=True)
+        em.add_field(name=f"💋 `{config.PREFIX}charm @user`",  value="Allure charm — magnetic energy", inline=True)
+        em.add_field(name=f"🖤 `{config.PREFIX}selfhex`",       value="Hex yourself — you unhinged legend", inline=True)
         em.set_footer(text=f"Cooldown: {SPELL_COOLDOWN}s per cast. 🌙")
         await ctx.send(embed=em)
 

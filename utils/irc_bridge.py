@@ -575,6 +575,23 @@ class IRCBridge:
 
             # ── Channel message ──
             if target.startswith("#"):
+                # Luna's own commands ($ping, $8ball, $roll, $weather …).
+                # These existed but nothing ever called them from IRC, so the
+                # room could only use the notsobot passthrough. Runs before the
+                # bridge-mapping check so they work in any channel Luna is in.
+                if message.startswith(config.PREFIX):
+                    try:
+                        from shared_cmds import SharedCommands
+                        reply = SharedCommands.get(self.bot, self).dispatch_irc(
+                            nick, message)
+                        if reply:
+                            for chunk in str(reply).split("\n")[:4]:
+                                if chunk.strip():
+                                    self._queue(target, chunk[:430])
+                            return
+                    except Exception as e:  # noqa: BLE001 — never kill the reader
+                        print(f"[irc_bridge] shared command error: {e}")
+
                 disc_ch = self.get_discord_for_irc(target)
                 if disc_ch is None:
                     return   # not a bridged channel
@@ -662,27 +679,8 @@ class IRCBridge:
             return False
         verb = raw[1:].lower()
 
-        # "$help" — the room should never have to guess what Luna does.
-        # Sent as three short lines because a single 450-char wall is unreadable
-        # on a phone, which is how most of this channel reads it.
-        if verb in ("help", "luna", "cmds", "commands"):
-            allowed = sorted(_allowed_notsobot_cmds())
-            self._queue(irc_ch,
-                f"\x0302Luna\x03 — I bridge this room to the other side. "
-                f"Anything you say here is relayed, and their replies come back "
-                f"tagged \x0313:discord:\x03.")
-            self._queue(irc_ch,
-                f"\x02$img <words>\x02 image search · \x02$magik <url>\x02 mangle "
-                f"a picture · \x02$edit <url>\x02 · \x02$ocr <url>\x02 read text "
-                f"from an image · \x02$translate <text>\x02")
-            self._queue(irc_ch,
-                f"\x02$help all\x02 for the full list ({len(allowed)} commands). "
-                f"Picture commands need an image URL — paste the link after the "
-                f"command.")
-            if (parts[1].lower() if len(parts) > 1 else "") in ("all", "full", "list"):
-                self._queue(irc_ch, "\x02all:\x03 " + ", ".join(allowed))
-            return True
-
+        # Help lives in shared_cmds.cmd_help — one help command, not two that
+        # drift apart.
         if verb not in _allowed_notsobot_cmds():
             return False          # not ours — fall through to the normal relay
 
@@ -741,7 +739,7 @@ class IRCBridge:
         for p in expired:
             self._queue(p["irc_ch"],
                 f"\x0313:discord:\x03 {p['nick']}: no answer for "
-                f"\x02{p['cmd']}\x02 — it may need an image URL.")
+                f"\x02{p['cmd']}\x02 — nothing replied on the other side.")
 
     async def handle_notsobot_response(self, message) -> bool:
         """
@@ -768,17 +766,19 @@ class IRCBridge:
                 return False
             pending = q[0]
 
-            # Determine if this message carries image content
+            # Does this message carry a RESULT? Originally this demanded an
+            # image, so the text commands — urban, translate, google, youtube,
+            # ocr — never matched: notsobot answered with an embed full of
+            # text, the reply sat unmatched, and the request timed out with a
+            # misleading "it may need an image URL". Any embed or any non-empty
+            # text from the bot counts now; only a bare typing indicator does
+            # not.
             has_attachment = bool(message.attachments)
-            has_image_embed = any(
-                (e.image or e.thumbnail or e.url)
-                for e in (message.embeds or [])
-            )
-            has_url_in_text = bool(message.content and
-                ("http://" in message.content or "https://" in message.content))
+            has_embed = bool(message.embeds)
+            has_text = bool((message.content or "").strip())
 
-            if not (has_attachment or has_image_embed or has_url_in_text):
-                return False   # not the result yet — keep pending
+            if not (has_attachment or has_embed or has_text):
+                return False   # nothing usable yet — keep pending
 
             # Consume the oldest pending entry — answers come back in order.
             irc_ch   = pending["irc_ch"]
@@ -787,7 +787,11 @@ class IRCBridge:
             if not q:
                 self._pending_notsobot.pop(disc_ch, None)
 
-        # Build the IRC relay text
+        # Build the IRC relay text. An embed's TITLE and DESCRIPTION are the
+        # answer for the text commands — a definition, a translation, a search
+        # result — and reading only image/url meant those came back empty and
+        # were dropped after the pending entry had already been consumed, so
+        # the asker got nothing at all.
         parts: List[str] = []
         for att in message.attachments:
             parts.append(att.url)
@@ -796,15 +800,24 @@ class IRCBridge:
                 parts.append(embed.image.url)
             elif embed.thumbnail and embed.thumbnail.url:
                 parts.append(embed.thumbnail.url)
-            elif embed.url:
+            title = (getattr(embed, "title", "") or "").strip()
+            desc = (getattr(embed, "description", "") or "").strip()
+            if title:
+                parts.append(title)
+            if desc:
+                parts.append(desc[:250])
+            if embed.url and not (title or desc):
                 parts.append(embed.url)
         if message.content:
-            # Include text content too (some notsobot commands return text)
-            content = message.content.strip()[:200]
+            content = message.content.strip()[:250]
             if content and content not in parts:
                 parts.insert(0, content)
 
+        # Nothing usable: put the request back so a later message can answer it
+        # rather than silently swallowing someone's command.
         if not parts:
+            with self._notsobot_lock:
+                self._pending_notsobot.setdefault(disc_ch, deque()).appendleft(pending)
             return False
 
         relay = f"\x0313:discord:\x03 {req_nick}: " + "  ".join(parts[:3])

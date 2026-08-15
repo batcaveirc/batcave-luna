@@ -47,7 +47,7 @@ DARES = [
     "Confess something in the confessions channel or DM it to Luna.",
     "React to the last 5 messages with increasingly unhinged emojis.",
     "Write your own horoscope for today. Make it dramatic.",
-    "Send an anonymous compliment to someone using !!confess.",
+    f"Send an anonymous compliment to someone using {config.PREFIX}confess.",
 ]
 
 NSFW_TRUTHS = [
@@ -61,7 +61,7 @@ NSFW_TRUTHS = [
 NSFW_DARES = [
     "Describe your ideal evening with someone here in exactly 3 sentences.",
     "Write the most seductive opening line you can and send it to the void.",
-    "Confess your most adult desire in !!confess — anonymous, no consequences.",
+    f"Confess your most adult desire in {config.PREFIX}confess — anonymous, no consequences.",
     "Describe someone in this room using only adjectives you'd whisper.",
     "Send the most charged message you'd normally delete before sending.",
 ]
@@ -121,7 +121,7 @@ class SocialCog(commands.Cog, name="Social"):
     async def tea(self, ctx, target: discord.Member = None):
         """Spill the tea on someone. ~tea @user"""
         if not target:
-            await ctx.send("*Luna leans forward.* Spill on who, darling? `!!tea @user`")
+            await ctx.send(f"*Luna leans forward.* Spill on who, darling? `{config.PREFIX}tea @user`")
             return
 
         line = random.choice(TEA)
@@ -136,7 +136,7 @@ class SocialCog(commands.Cog, name="Social"):
     async def confess(self, ctx, *, message: str = ""):
         """Send an anonymous confession. ~confess <your secret>"""
         if not message:
-            await ctx.send("*Luna opens the confession book.* Tell me. Nobody will know it was you. `!!confess <secret>`")
+            await ctx.send(f"*Luna opens the confession book.* Tell me. Nobody will know it was you. `{config.PREFIX}confess <secret>`")
             return
 
         # Delete the command message to preserve anonymity
@@ -204,7 +204,7 @@ class SocialCog(commands.Cog, name="Social"):
     async def ship(self, ctx, user1: discord.Member = None, user2: discord.Member = None):
         """Check compatibility between two people. ~ship @user1 @user2"""
         if not user1 or not user2:
-            await ctx.send("*Luna opens the compatibility tome.* `!!ship @user1 @user2`")
+            await ctx.send(f"*Luna opens the compatibility tome.* `{config.PREFIX}ship @user1 @user2`")
             return
 
         seed    = abs(hash(f"{user1.id}{user2.id}")) % len(COMPATIBILITY)
@@ -230,7 +230,7 @@ class SocialCog(commands.Cog, name="Social"):
     async def seduce(self, ctx, target: discord.Member = None):
         """Luna seduces someone on your behalf. ~seduce @user"""
         if not target:
-            await ctx.send("*Luna raises an eyebrow.* On whose behalf am I working? `!!seduce @user`")
+            await ctx.send(f"*Luna raises an eyebrow.* On whose behalf am I working? `{config.PREFIX}seduce @user`")
             return
         if target == ctx.author:
             await ctx.send("*Luna stares.* You want me to seduce you... for yourself. Darling. The audacity. I respect it.")

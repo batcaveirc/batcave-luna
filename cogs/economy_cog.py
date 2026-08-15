@@ -133,7 +133,7 @@ class EconomyCog(commands.Cog, name="Dark Economy"):
     async def sacrifice(self, ctx, target: discord.Member = None):
         """Attempt to steal Soul Shards from another."""
         if not target or target == ctx.author:
-            await ctx.send("*Luna raises an eyebrow.* Sacrifice who, exactly? `!!sacrifice @user`")
+            await ctx.send(f"*Luna raises an eyebrow.* Sacrifice who, exactly? `{config.PREFIX}sacrifice @user`")
             return
 
         data     = _load()
@@ -193,7 +193,7 @@ class EconomyCog(commands.Cog, name="Dark Economy"):
             for c in COVENS:
                 members = sum(1 for u in data.values() if isinstance(u, dict) and u.get("coven") == c)
                 em.add_field(name=c, value=f"{members} members", inline=True)
-            em.set_footer(text="!!coven join <name> | !!coven leave 🌙")
+            em.set_footer(text=f"{config.PREFIX}coven join <name> | {config.PREFIX}coven leave 🌙")
             await ctx.send(embed=em)
             return
 
@@ -211,7 +211,7 @@ class EconomyCog(commands.Cog, name="Dark Economy"):
             await ctx.send(
                 f"*Luna gestures to the circles.* Which coven calls to you?\n"
                 + "\n".join(f"• **{c}**" for c in COVENS)
-                + "\n\n`!!coven join <name>`"
+                + f"\n\n`{config.PREFIX}coven join <name>`"
             )
             return
 
@@ -232,7 +232,7 @@ class EconomyCog(commands.Cog, name="Dark Economy"):
             )
             await ctx.send(embed=em)
         else:
-            await ctx.send("*Luna frowns.* That coven doesn't exist. Use `!!coven info` to see the list.")
+            await ctx.send(f"*Luna frowns.* That coven doesn't exist. Use `{config.PREFIX}coven info` to see the list.")
 
     # ── ~brew ─────────────────────────────────────────────────────────────
 
@@ -252,12 +252,12 @@ class EconomyCog(commands.Cog, name="Dark Economy"):
                     value = info["desc"],
                     inline=False,
                 )
-            em.set_footer(text="!!brew <name> to craft 🌙")
+            em.set_footer(text=f"{config.PREFIX}brew <name> to craft 🌙")
             await ctx.send(embed=em)
             return
 
         if potion not in POTIONS:
-            await ctx.send(f"*Luna shakes her head.* No such potion. Try `!!brew list`.")
+            await ctx.send(f"*Luna shakes her head.* No such potion. Try `{config.PREFIX}brew list`.")
             return
 
         data   = _load()

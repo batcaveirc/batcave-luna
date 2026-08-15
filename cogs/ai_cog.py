@@ -24,6 +24,8 @@ import aiohttp
 import discord
 from discord.ext import commands
 
+import config
+
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 REASONING_MIN_TOKENS = 320
 REQUEST_TIMEOUT = 30
@@ -121,7 +123,7 @@ class AICog(commands.Cog):
         if isinstance(error, commands.CommandOnCooldown):
             await ctx.send(f"easy — {int(error.retry_after) + 1}s.")
         elif isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send("ask me something: `!!ai what is the moon made of`")
+            await ctx.send(f"ask me something: `{config.PREFIX}ai what is the moon made of`")
 
 
 async def setup(bot: commands.Bot) -> None:
