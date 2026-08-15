@@ -66,10 +66,6 @@ jobs:
           STARALIGN_RELAY_URL: ${{ secrets.STARALIGN_RELAY_URL }}
           STARALIGN_RELAY_SECRET: ${{ secrets.STARALIGN_RELAY_SECRET }}
 
-          # Extra notsobot commands IRC may trigger, comma-separated. The
-          # built-in denylist of destructive verbs still applies.
-          NOTSOBOT_EXTRA_CMDS: ${{ secrets.NOTSOBOT_EXTRA_CMDS }}
-
           # Off by default — it spammed the room and burned the relay's
           # bandwidth. Set to 1 only to bring it back deliberately.
         run: python luna.py

@@ -165,13 +165,6 @@ async def on_message(message: discord.Message):
     if bot.user is not None and message.author.id == bot.user.id:
         return
 
-    # ── Notsobot response check — runs for ALL bot messages in bridged channels
-    # Must run before the human-message relay block below.
-    if message.author.bot and message.guild:
-        if await bridge.handle_notsobot_response(message):
-            await bot.process_commands(message)
-            return   # notsobot result relayed — don't double-relay to IRC
-
     # Other bots in the bridged channel (e.g. the Vampire bot) ARE relayed,
     # but as the single shared identity "bot" on StarAlign.
     author_is_bot = bool(message.author.bot)

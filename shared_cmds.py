@@ -147,21 +147,6 @@ class SharedCommands:
                 f"[\x02Bridge\x02] {p}ping · {p}nicks who is here · "
                 f"{p}say <msg> cross-post"
             )
-        if sub in ("all", "full", "list"):
-            # The picture commands live in the bridge's allowlist; import it
-            # lazily so the two modules don't import each other at load time.
-            try:
-                from utils.irc_bridge import _allowed_notsobot_cmds
-                every = ", ".join(sorted(_allowed_notsobot_cmds()))
-            except Exception:
-                every = "(unavailable)"
-            return f"[\x02All pictures/search\x02] {every}"
-        if sub in ("img", "image", "pics"):
-            return (
-                f"[\x02Pictures\x02] {p}img <words> · {p}magik <url> · "
-                f"{p}edit <url> · {p}deepfry <url> · {p}caption <url> <text> — "
-                f"{p}help all for every one"
-            )
         # The first line states what Luna is. HybridIRC's relay policy asks
         # that relay bots be clearly identified and that users know their
         # messages leave the channel — and it is simply fair warning.
@@ -172,8 +157,7 @@ class SharedCommands:
             f"Talk to me: just say my name, or {p}ai <question> · "
             f"Fun: {p}roll {p}flip {p}choose {p}calc {p}weather · "
             f"Bridge: {p}ping {p}nicks {p}say · "
-            f"Pictures: {p}img {p}magik {p}edit · "
-            f"More: {p}help fun | {p}help bridge | {p}help img | {p}help all"
+            f"More: {p}help fun | {p}help bridge"
         )
 
 

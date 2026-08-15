@@ -171,31 +171,7 @@ class AdminCog(commands.Cog, name="Admin"):
 
     # ── IRC mod commands ──────────────────────────────────────────────────────
 
-    @commands.command(name="irckick")
-    @mod_only()
-    async def irc_kick(self, ctx: commands.Context, nick: str, *, reason: str = "Kicked from Discord"):
-        """Kick a user from IRC #BatCave. Luna must be an IRC op."""
-        if not self._bridge:
-            await ctx.send("❌ IRC bridge is not running.")
-            return
-        success = self._bridge.kick_irc(nick, reason)
-        if success:
-            await ctx.send(f"👢 Sent IRC KICK for **{nick}** — reason: *{reason}*\n*(Luna needs to be an IRC op for this to work)*")
-        else:
-            await ctx.send("❌ IRC bridge is not connected right now.")
 
-    @commands.command(name="ircban")
-    @mod_only()
-    async def irc_ban(self, ctx: commands.Context, nick: str):
-        """Ban a user from IRC #BatCave (MODE +b). Luna must be an IRC op."""
-        if not self._bridge:
-            await ctx.send("❌ IRC bridge is not running.")
-            return
-        success = self._bridge.ban_irc(nick)
-        if success:
-            await ctx.send(f"🔨 Sent IRC MODE +b for **{nick}**\n*(Luna needs to be an IRC op for this to work)*")
-        else:
-            await ctx.send("❌ IRC bridge is not connected right now.")
 
     @commands.command(name="ircnicks", aliases=["who"])
     async def irc_nicks(self, ctx: commands.Context, irc_channel: str = ""):
