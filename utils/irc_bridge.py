@@ -30,17 +30,15 @@ _RECONNECT_DELAY_MAX = 120   # cap for exponential backoff
 _SOCKET_TIMEOUT      = 30    # detect dead connections fast
 _SEND_DELAY          = 0.5   # seconds between outbound IRC messages (rate-limit)
 
-# ── Notsobot command map: IRC trigger → Discord command prefix ────────────────
-# IRC user types: !img search cats   → Luna sends: .img search cats  to Discord
-# Notsobot replies in Discord → Luna relays the image URL back to IRC
-# IRC user types: .img cats  → Luna sends ".img cats" into the bridged Discord
+# ── Notsobot bridge ───────────────────────────────────────────────────────────
+# IRC user types: $img cats  → Luna sends ".img cats" into the bridged Discord
 # channel → notsobot answers there → Luna relays the image URL back to IRC.
 #
-# "." is the primary prefix because it is what notsobot actually uses, so the
-# command reads the same in both rooms. "!" stays as an alias for muscle
-# memory. Neither collides with the other bots in these channels (Vampire uses
-# "!" with its own verbs, Dracula uses "!!").
-_NOTSOBOT_PREFIXES = (".", "!")
+# "$" is Luna's own prefix and nothing else in these rooms uses it. "." stays
+# because it is notsobot's real syntax, so ".img" reads identically in both
+# rooms and it collides with nothing. "!" was dropped: that is the Vampire
+# bot's prefix and a shared one means two bots racing the same line.
+_NOTSOBOT_PREFIXES = ("$", ".")
 
 # ALLOWLIST, and it must stay one. Without it, anyone in the IRC room could
 # make Luna type an arbitrary command at any Discord bot — ".ban", ".purge",
@@ -79,6 +77,22 @@ def _allowed_notsobot_cmds() -> frozenset:
         if c.strip()
     }
     return frozenset((_NOTSOBOT_DEFAULT_CMDS | extra) - _NOTSOBOT_FORBIDDEN)
+
+
+_NICK_RECLAIM_SECS = 60      # how often to check we still hold our own nick
+
+
+def numeric(line: str) -> str:
+    """The server numeric of a line, or "".
+
+    Substring tests like `" 433 " in line` look equivalent and are not: any
+    message whose TEXT contains that number matches too. The identical bug made
+    the Vampire bot rename itself to "Vampire_" because numeric 254 reported a
+    channel count that happened to contain "433". Anchor it to the position a
+    numeric actually occupies.
+    """
+    m = re.match(r"^:\S+\s+(\d{3})\s", line)
+    return m.group(1) if m else ""
 
 
 _NOTSOBOT_PENDING_TTL = 60   # image edits are slow; 30s was timing out
@@ -135,9 +149,12 @@ class IRCBridge:
         self._notsobot_lock = threading.Lock()
         self._notsobot_cooldown: Dict[str, float] = {}   # nick(lower) → ts
 
-        # ── Brawl game hook ───────────────────────────────────────────────────
-        # Set by luna.py after BrawlGame is created so IRC !! commands reach it.
-        self._brawl_game = None
+        # The nick we are ACTUALLY using. Not always config.IRC_NICK: a 433
+        # collision or NickServ enforcement can change it under us, and code
+        # that assumes otherwise stops recognising its own messages.
+        self._nick = config.IRC_NICK
+        self._last_reclaim = 0.0
+
 
     # ── Mapping helpers ───────────────────────────────────────────────────────
 
@@ -294,6 +311,40 @@ class IRCBridge:
         with self._topics_lock:
             return self._topics.get(ch)
 
+    def _reclaim_nick(self) -> None:
+        """Re-identify, evict whatever holds our nick, take it back, rejoin.
+
+        Called both on a detected force-rename and from the watchdog, because
+        enforcement is not the only way to lose a nick.
+        """
+        if not config.IRC_NICKSERV_PASS:
+            return
+        try:
+            self._raw(f"PRIVMSG NickServ :IDENTIFY {config.IRC_NICKSERV_PASS}")
+            self._raw(f"PRIVMSG NickServ :GHOST {config.IRC_NICK} {config.IRC_NICKSERV_PASS}")
+            self._raw(f"PRIVMSG NickServ :RELEASE {config.IRC_NICK} {config.IRC_NICKSERV_PASS}")
+            self._raw(f"NICK {config.IRC_NICK}")
+            with self._map_lock:
+                channels = list(self._i2d.keys())
+            for ch in channels:
+                self._raw(f"JOIN {ch}")
+        except Exception as e:  # noqa: BLE001 — recovery must never kill the loop
+            print(f"[irc_bridge] Nick reclaim failed: {e}")
+
+    def quit(self, message: str = "Luna fades into the moonlight...") -> None:
+        """Leave cleanly. Without this the session lingers until ping-timeout
+        and the NEXT run finds its own nick taken — which is how a bot ends up
+        as Luna1_ every handoff. GitHub Actions sends SIGTERM at the 6h cap, so
+        this runs roughly four times a day."""
+        self._running = False
+        try:
+            if self._sock:
+                self._raw(f"QUIT :{message}")
+                time.sleep(0.4)          # let it reach the server before FIN
+                self._sock.close()
+        except Exception:
+            pass
+
     def reconnect(self):
         """Force-drop and re-establish the IRC connection."""
         self._force_reconnect = True
@@ -377,20 +428,41 @@ class IRCBridge:
         print(f"[irc_bridge] Connecting to {config.IRC_SERVER}:{config.IRC_PORT}")
         self._sock.connect((config.IRC_SERVER, config.IRC_PORT))
         self._last_ping = time.time()
+        self._nick = config.IRC_NICK
         self._raw(f"NICK {config.IRC_NICK}")
         self._raw(f"USER {config.IRC_NICK} 0 * :{config.IRC_REALNAME}")
 
         buf = ""
+        silent_rounds = 0
         while self._running and not self._force_reconnect:
             try:
                 data = self._sock.recv(4096).decode("utf-8", errors="replace")
             except socket.timeout:
+                # A half-open TCP link (NAT timeout, dropped route) stays
+                # writable forever: our PINGs vanish and nothing comes back, so
+                # the bot looks online and answers nothing. Inbound silence is
+                # the only honest evidence, and the server pings us every couple
+                # of minutes — so after several silent rounds, tear it down and
+                # let the reconnect path run.
+                silent_rounds += 1
                 if self._connected:
                     self._raw(f"PING :{config.IRC_SERVER}")
+                if silent_rounds >= 4:      # 4 × _SOCKET_TIMEOUT = 2 minutes
+                    print("[irc_bridge] No inbound traffic for 2 min — link is "
+                          "dead, forcing reconnect.")
+                    break
                 continue
             if not data:
                 break
+            silent_rounds = 0
             self._last_ping = time.time()
+            # Enforcement can strike at any time, not only at registration.
+            if (self._connected
+                    and self._nick.lower() != config.IRC_NICK.lower()
+                    and time.time() - self._last_reclaim > _NICK_RECLAIM_SECS):
+                self._last_reclaim = time.time()
+                print(f"[irc_bridge] Still on {self._nick} — retrying reclaim.")
+                self._reclaim_nick()
             buf += data
             while "\r\n" in buf:
                 line, buf = buf.split("\r\n", 1)
@@ -409,8 +481,10 @@ class IRCBridge:
             print(f"[irc_bridge] Server error: {line}")
             raise ConnectionError(line)
 
+        num = numeric(line)
+
         # 001 = registered
-        if " 001 " in line:
+        if num == "001":
             current_nick = config.IRC_NICK
             print(f"[irc_bridge] Registered as {current_nick}")
             if config.IRC_NICKSERV_PASS:
@@ -449,9 +523,10 @@ class IRCBridge:
             return
 
         # Nick in use (433) — connect with temporary _ suffix, then ghost + reclaim
-        if " 433 " in line:
+        if num == "433":
             fallback = f"{config.IRC_NICK}_"
             print(f"[irc_bridge] Nick in use — using {fallback}, will GHOST after auth")
+            self._nick = fallback
             self._raw(f"NICK {fallback}")
             return
 
@@ -474,6 +549,17 @@ class IRCBridge:
                     if old_nick in ch_nicks:
                         ch_nicks.discard(old_nick)
                         ch_nicks.add(new_nick)
+            # Were WE the one renamed? NickServ enforcement force-renames an
+            # unidentified protected nick to Guest#### within ~1.5s, and the
+            # channel then refuses "Guest*". This took the Vampire bot offline
+            # for hours because nothing noticed it was no longer itself:
+            # identifying early narrows the race but cannot remove it, so the
+            # missing half is recovery.
+            if old_nick.lower() == self._nick.lower():
+                self._nick = new_nick
+                if new_nick.lower() != config.IRC_NICK.lower():
+                    print(f"[irc_bridge] Force-renamed to {new_nick} — reclaiming.")
+                    self._reclaim_nick()
             return
 
         # PRIVMSG — channel or PM
@@ -489,13 +575,6 @@ class IRCBridge:
 
             # ── Channel message ──
             if target.startswith("#"):
-                # ── Brawl: dispatch !! commands regardless of Discord mapping ──
-                if self._brawl_game is not None and message.startswith("!!"):
-                    try:
-                        self._brawl_game.handle_irc_message(nick, target, message)
-                    except Exception as _bge:
-                        print(f"[brawl] dispatch error: {_bge}")
-
                 disc_ch = self.get_discord_for_irc(target)
                 if disc_ch is None:
                     return   # not a bridged channel
@@ -583,13 +662,25 @@ class IRCBridge:
             return False
         verb = raw[1:].lower()
 
-        # ".luna" lists what is available, so nobody has to guess.
-        if verb in ("luna", "cmds", "commands"):
+        # "$help" — the room should never have to guess what Luna does.
+        # Sent as three short lines because a single 450-char wall is unreadable
+        # on a phone, which is how most of this channel reads it.
+        if verb in ("help", "luna", "cmds", "commands"):
             allowed = sorted(_allowed_notsobot_cmds())
             self._queue(irc_ch,
-                f"\x0313:discord:\x03 {nick}: try \x02.img cats\x02 or "
-                f"\x02.magik <image url>\x02 — {len(allowed)} commands: "
-                + ", ".join(allowed[:40]))
+                f"\x0302Luna\x03 — I bridge this room to the other side. "
+                f"Anything you say here is relayed, and their replies come back "
+                f"tagged \x0313:discord:\x03.")
+            self._queue(irc_ch,
+                f"\x02$img <words>\x02 image search · \x02$magik <url>\x02 mangle "
+                f"a picture · \x02$edit <url>\x02 · \x02$ocr <url>\x02 read text "
+                f"from an image · \x02$translate <text>\x02")
+            self._queue(irc_ch,
+                f"\x02$help all\x02 for the full list ({len(allowed)} commands). "
+                f"Picture commands need an image URL — paste the link after the "
+                f"command.")
+            if (parts[1].lower() if len(parts) > 1 else "") in ("all", "full", "list"):
+                self._queue(irc_ch, "\x02all:\x03 " + ", ".join(allowed))
             return True
 
         if verb not in _allowed_notsobot_cmds():

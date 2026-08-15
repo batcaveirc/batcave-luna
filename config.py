@@ -49,9 +49,10 @@ IRC_REALNAME      = "Luna — Moon Witch of the BatCave"
 # ── AI ────────────────────────────────────────────────────────────────────────
 
 # ── BatBot monitoring ────────────────────────────────────────────────────────
-# HTTP keep-alive URL for BatBot's Replit (e.g. https://batbot.yourname.repl.co)
+# Optional health URL for the Vampire bot. Unset = $batstatus reports the
+# IRC side only, which is the useful half anyway.
 BATBOT_REPLIT_URL     = os.getenv("BATBOT_REPLIT_URL", "")
-# URL to open BatBot's Replit editor/run page (shown in Discord when BatBot is down)
+# Optional link shown in Discord when the Vampire bot looks down.
 BATBOT_REPLIT_PROJECT = os.getenv("BATBOT_REPLIT_PROJECT", "")
 # BatBot's IRC nick to watch for in #BatCave
 BATBOT_IRC_NICK       = os.getenv("BATBOT_IRC_NICK", "Vampire")
@@ -61,6 +62,9 @@ ALERT_CHANNEL         = os.getenv("ALERT_CHANNEL", "bot-logs")
 MOD_ROLE              = os.getenv("MOD_ROLE", "Moderator")
 
 # ── Bot identity ──────────────────────────────────────────────────────────────
-PREFIX    = "!!"
+# "$" is Luna's alone. "!" is the Vampire bot's and "!!" is Dracula's, so a
+# shared prefix means two bots answering one line — or neither, if they both
+# assume the other took it.
+PREFIX    = os.getenv("LUNA_PREFIX", "$")
 BOT_NAME  = "Luna"
 BOT_COLOR = 0x9B59B6   # Purple — Luna's signature colour

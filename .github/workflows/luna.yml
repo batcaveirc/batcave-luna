@@ -55,6 +55,7 @@ jobs:
           NSFW_CHANNEL: ${{ secrets.NSFW_CHANNEL || 'nsfw' }}
           ALERT_CHANNEL: ${{ secrets.ALERT_CHANNEL || 'bot-logs' }}
           MOD_ROLE: ${{ secrets.MOD_ROLE }}
+          LUNA_PREFIX: ${{ secrets.LUNA_PREFIX || '$' }}
 
           # ── Identity kept out of a public repo ───────────────────────────
           LUNA_CREDIT: ${{ secrets.LUNA_CREDIT }}
@@ -71,5 +72,4 @@ jobs:
 
           # Off by default — it spammed the room and burned the relay's
           # bandwidth. Set to 1 only to bring it back deliberately.
-          LUNA_BRAWL: ${{ secrets.LUNA_BRAWL || '0' }}
         run: python luna.py

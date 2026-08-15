@@ -22,16 +22,23 @@ Actions). Everything else has a working default in the workflow.
 
 Optional: `IRC_NICK`, `IRC_CHANNEL`, `BRIDGE_CHANNEL`, `MOD_ROLE`,
 `LUNA_CREDIT`, `LUNA_OWNERS_IRC`, `LUNA_PRIMARY_OWNER`, `NOTSOBOT_EXTRA_CMDS`,
-`STARALIGN_RELAY_URL` + `STARALIGN_RELAY_SECRET`, `LUNA_BRAWL`.
+`STARALIGN_RELAY_URL` + `STARALIGN_RELAY_SECRET`, `LUNA_PREFIX`.
 
 Then run the workflow once from the Actions tab; after that the cron keeps it
 going on its own.
 
 ## Commands
 
-In Discord: `!!ircjoin #channel` maps the current Discord channel to an IRC
-channel, `!!ircpart` unmaps it, `!!ircbridges` lists the mappings,
-`!!ircinfo` / `!!ircping` report status.
+Luna's prefix is **`$`** everywhere — Discord and IRC. `!` belongs to the
+Vampire bot and `!!` to Dracula, so a shared prefix would mean two bots racing
+the same line.
+
+**`$help`** in the IRC channel explains the relay and lists the commands;
+`$help all` prints the full set.
+
+In Discord: `$ircjoin #channel` maps the current Discord channel to an IRC
+channel, `$ircpart` unmaps it, `$ircbridges` lists the mappings,
+`$ircinfo` / `$ircping` report status. `$ai <question>` asks Luna something.
 
 ## notsobot from IRC
 
@@ -45,8 +52,8 @@ uses in Discord:
 ```
 
 Luna types the command into the Discord channel, waits for notsobot's reply,
-and relays the resulting image URL back to IRC. `!img` also works, for muscle
-memory. Image commands like `.edit` and `.magik` need something to work on, so
+and relays the resulting image URL back to IRC. `.img` also works, since that
+is notsobot's own syntax. Image commands like `.edit` and `.magik` need something to work on, so
 pass an image URL — an IRC user has nothing to attach.
 
 **Only image and text toys are forwarded, never moderation.** The list is an

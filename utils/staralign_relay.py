@@ -5,7 +5,7 @@ Messages arrive as anonymous relay users in StarAlign's "The Bridge" chatroom.
 Users appear as "Guest XXXX" (deterministic hash) — no platform info is exposed.
 
 Configuration (in .env):
-  STARALIGN_RELAY_URL=https://us-central1-nakhatra-app-project.cloudfunctions.net/api/community/relay/ingest
+  STARALIGN_RELAY_URL=https://<your-backend>/api/community/relay/ingest
   STARALIGN_RELAY_SECRET=<shared secret matching RELAY_BOT_SECRET in functions/.env>
 """
 
@@ -26,12 +26,11 @@ except ImportError:
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
-_DEFAULT_URL = (
-    "https://us-central1-nakhatra-app-project.cloudfunctions.net"
-    "/api/community/relay/ingest"
-)
-
-STARALIGN_RELAY_URL: str = os.getenv("STARALIGN_RELAY_URL", _DEFAULT_URL)
+# No default endpoint. This repo is public, and a hardcoded cloud-function URL
+# publishes which backend project the owner runs — infrastructure nobody needs
+# to know about. Unset, the relay stays dormant, which is the right behaviour
+# for anyone who is not the owner running this.
+STARALIGN_RELAY_URL: str = os.getenv("STARALIGN_RELAY_URL", "")
 STARALIGN_RELAY_SECRET: str = os.getenv("STARALIGN_RELAY_SECRET", "")
 STARALIGN_BOT_ID: str = "relaybot"
 

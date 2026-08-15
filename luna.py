@@ -30,7 +30,6 @@ _luna_ready_fired = False   # guard: prevents duplicate on_ready init
 _bridge_started   = False   # guard: prevents duplicate IRC bridge start
 _outbound_cursor  = 0       # last StarAlign msg ts pulled (reverse relay)
 _outbound_started = False   # guard: prevents duplicate poll loop start
-_brawl_started    = False   # guard: prevents duplicate BrawlGame start
 
 # ── Intents ───────────────────────────────────────────────────────────────────
 
@@ -88,41 +87,6 @@ async def on_ready():
         bridge.start(asyncio.get_event_loop())
     else:
         print("[luna] IRC bridge already running, skipping.")
-
-    # ── BrawlGame startup (DISABLED) ──────────────────────────────────────
-    # Removed from Luna: the brawl game spammed the room and burned CPU/IRC
-    # bandwidth on Luna's relay connection. Set LUNA_BRAWL=1 to re-enable.
-    global _brawl_started
-    if os.getenv("LUNA_BRAWL", "0") == "1" and not _brawl_started:
-        _brawl_started = True
-        try:
-            import threading as _threading
-            from brawl.game import BrawlGame as _BrawlGame
-
-            # Build the channel name (BRIDGE_CHANNEL may or may not have #)
-            _brawl_ch = (config.BRIDGE_CHANNEL or "#batcave")
-            if not _brawl_ch.startswith("#"):
-                _brawl_ch = f"#{_brawl_ch}"
-
-            # Bridged say_fn: routes brawl output through Luna1's IRC connection
-            def _brawl_say(msg: str, _ch=_brawl_ch):
-                bridge.send_to_irc(msg, discord_channel=config.BRIDGE_CHANNEL)
-
-            # Bridged kick_fn: Luna1 kicks the player from IRC (special attack drama)
-            def _brawl_kick(nick: str, reason: str, _ch=_brawl_ch):
-                bridge.kick_irc(nick, reason, _ch)
-
-            _brawl_game = _BrawlGame(say_fn=_brawl_say, kick_fn=_brawl_kick)
-            bridge._brawl_game = _brawl_game   # hook IRC !! commands to the game
-
-            _threading.Thread(
-                target=_brawl_game.start,
-                daemon=True,
-                name="brawl-game",
-            ).start()
-            print("[luna] BrawlGame started — using Luna1's IRC connection (no BrawlBot nick).")
-        except Exception as _be:
-            print(f"[luna] BrawlGame failed to start: {_be}")
 
     await bot.change_presence(
         activity=discord.Activity(
@@ -349,9 +313,35 @@ async def main():
         await bot.start(config.DISCORD_TOKEN)
 
 
+def _install_signal_handlers() -> None:
+    """Leave IRC cleanly when the host stops us.
+
+    GitHub Actions sends SIGTERM at the job timeout — roughly four times a day.
+    Without a QUIT the old session lingers until ping-timeout and the NEXT run
+    finds Luna1 taken, so it lands on Luna1_ and has to ghost its way back.
+    """
+    import signal
+
+    def _bye(signum, _frame):
+        print(f"[luna] signal {signum} — leaving IRC cleanly.")
+        try:
+            bridge.quit()
+        except Exception as e:  # noqa: BLE001 — never block the exit
+            print(f"[luna] quit error: {e}")
+        raise SystemExit(0)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, _bye)
+        except (ValueError, OSError):
+            pass          # not the main thread / unsupported platform
+
+
 if __name__ == "__main__":
     import errno as _errno
     import socket as _socket
+
+    _install_signal_handlers()
 
     # ── Single-instance lock — prevents duplicate Luna processes ──────────
     try:
