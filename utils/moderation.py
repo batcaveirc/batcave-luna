@@ -29,6 +29,7 @@ import os
 import re
 import time
 import unicodedata
+from fnmatch import fnmatch
 from collections import deque
 from typing import Dict, Optional, Tuple
 
@@ -101,6 +102,11 @@ class Moderator:
             n.strip().lower()
             for n in os.getenv("LUNA_WHITELIST_IRC", "").split(",") if n.strip()
         }
+        # Trust that follows the HOST. A regular who arrives under a different
+        # nick each day cannot be covered by a nick list, however long it gets.
+        self._trusted_masks = [
+            m.strip() for m in os.getenv("TRUSTED_MASKS", "").split(",") if m.strip()
+        ]
         # Never police the other bots or the services.
         self._never = {
             "chanserv", "nickserv", "chanbot", "dracula", "vampire", "luna1",
@@ -112,6 +118,15 @@ class Moderator:
         n = nick.lower()
         if n in self._never or n in self._whitelist:
             return True
+        if self._trusted_masks:
+            host = ""
+            try:
+                host = self.bridge.host_of(nick)
+            except Exception:
+                pass
+            if host and any(fnmatch(f"{nick}!{host}".lower(), m.lower())
+                            for m in self._trusted_masks):
+                return True
         # Channel operators are the humans in charge; never act on them.
         try:
             return self.bridge.has_prefix(channel, nick)

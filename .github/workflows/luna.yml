@@ -60,6 +60,8 @@ jobs:
           LUNA_MOD: ${{ secrets.LUNA_MOD || 'off' }}
           LUNA_SEVERE_WORDS: ${{ secrets.LUNA_SEVERE_WORDS }}
           LUNA_WHITELIST_IRC: ${{ secrets.LUNA_WHITELIST_IRC || secrets.WHITELIST }}
+          # Host masks Luna never acts on, for regulars who change nick.
+          TRUSTED_MASKS: ${{ secrets.TRUSTED_MASKS }}
 
           # ── Discord side of the bridge ───────────────────────────────────
           BRIDGE_CHANNEL: ${{ secrets.BRIDGE_CHANNEL || '🅱🅰🆃🅲🅰🆅🅴' }}
@@ -77,6 +79,4 @@ jobs:
           STARALIGN_RELAY_URL: ${{ secrets.STARALIGN_RELAY_URL }}
           STARALIGN_RELAY_SECRET: ${{ secrets.STARALIGN_RELAY_SECRET }}
 
-          # Off by default — it spammed the room and burned the relay's
-          # bandwidth. Set to 1 only to bring it back deliberately.
         run: python luna.py

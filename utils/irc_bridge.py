@@ -31,8 +31,12 @@ _SOCKET_TIMEOUT      = 30    # detect dead connections fast
 _SEND_DELAY          = 0.5   # seconds between outbound IRC messages (rate-limit)
 
 _NICK_RECLAIM_SECS = 60      # how often to check we still hold our own nick
-_AI_COOLDOWN      = 12       # seconds between AI replies to one person
-_AI_CHANNEL_GAP   = 4        # seconds between AI replies in a channel
+# 12s was long enough that a normal back-and-forth got swallowed: someone says
+# hello, she answers, they reply and she ignores them. Silence reads as "the
+# bot is broken", which is worse than the flood these numbers were guarding
+# against. Short enough to hold a conversation, long enough to stop a wall.
+_AI_COOLDOWN      = 4        # seconds between AI replies to one person
+_AI_CHANNEL_GAP   = 2        # seconds between AI replies in a channel
 
 
 def _wrap(text: str, size: int = 380) -> List[str]:
@@ -126,6 +130,7 @@ class IRCBridge:
         self._ai_last_channel = 0.0
         self._connect_time = time.time()
         self._last_tags: Dict[str, str] = {}
+        self._hosts: Dict[str, str] = {}   # nick(lower) -> user@host
 
         from utils.moderation import Moderator
         self.moderator = Moderator(self)
@@ -262,6 +267,9 @@ class IRCBridge:
 
     # ── Nick / topic queries ──────────────────────────────────────────────────
 
+    def host_of(self, nick: str) -> str:
+        return self._hosts.get(nick.lower(), "")
+
     def has_prefix(self, irc_channel: str, nick: str) -> bool:
         """True if the nick carries an operator-ish prefix in that channel."""
         with self._nicks_lock:
@@ -311,7 +319,7 @@ class IRCBridge:
         now = time.time()
         key = nick.lower()
         if now - self._ai_cooldown.get(key, 0.0) < _AI_COOLDOWN:
-            return False                      # quietly ignore, not an error
+            return False        # too soon; the line still relays as normal chat
         if now - self._ai_last_channel < _AI_CHANNEL_GAP:
             return False
         self._ai_cooldown[key] = now
@@ -648,8 +656,12 @@ class IRCBridge:
             return
 
         # PRIVMSG — channel or PM
-        m = re.match(r"^:([^!]+)!\S+\s+PRIVMSG\s+(\S+)\s+:(.*)$", line)
+        m = re.match(r"^:([^!]+)!(\S+)\s+PRIVMSG\s+(\S+)\s+:(.*)$", line)
         if m:
+            # Remember the host: trust that follows a person rather than a nick
+            # needs it, and someone who changes nick keeps the same host.
+            self._hosts[m.group(1).lower()] = m.group(2)
+            m = re.match(r"^:([^!]+)!\S+\s+PRIVMSG\s+(\S+)\s+:(.*)$", line)
             nick    = m.group(1)
             target  = m.group(2)
             message = m.group(3).strip()
