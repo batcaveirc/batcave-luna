@@ -179,7 +179,24 @@ async def on_message(message: discord.Message):
         and not message.clean_content.startswith(config.PREFIX)
         and bridge.get_irc_for_discord(message.channel.name)
     ):
-        # Discord -> IRC relay
+        # Discord -> IRC relay. Screen it first: relayed text arrives in IRC
+        # under Luna's opped nick, which every moderator bot treats as exempt,
+        # so nothing downstream will ever check it.
+        blocked = None
+        try:
+            blocked = bridge.moderator.screen_relay(message.clean_content)
+        except Exception as e:  # noqa: BLE001 — never break the relay
+            print(f"[luna] relay screen error: {e}")
+        if blocked:
+            print(f"[luna] withheld a message from IRC: {blocked}")
+            try:
+                await message.channel.send(
+                    f"*(not carried across — {blocked})*", delete_after=20)
+            except Exception:
+                pass
+            await bot.process_commands(message)
+            return
+
         if relay_state.is_enabled(RELAY_TO_IRC):
             irc_msg = f"\x0313:discord:\x03 {relay_username}: {message.clean_content[:380]}"
             bridge.send_to_irc(irc_msg, discord_channel=message.channel.name)

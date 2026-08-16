@@ -191,6 +191,36 @@ class Moderator:
 
         return False
 
+    def screen_relay(self, text: str) -> Optional[str]:
+        """Should this Discord message be withheld from IRC?
+
+        The bridge is a hole in the moderation, and it was wide open: Luna is
+        opped in both rooms, Dracula never moderates channel operators, and
+        every Discord line was relayed verbatim under her nick. Anyone on the
+        far side could put anything into the channel and nothing would touch
+        it.
+
+        Screening happens HERE because it is the only place it can. Dracula
+        cannot act on a person who is not in the room, and warning them is
+        meaningless — the only proportionate response to something that should
+        not be said in the room is to not carry it there.
+
+        Ordinary profanity still passes: an IRC user only gets a warning for
+        that, so blocking it from Discord would be harsher than the rule it is
+        mirroring. Severe content does not pass at all.
+        """
+        if not text:
+            return None
+        folded = deconfuse(text)
+        hit = _severe_hit(folded) or _severe_hit(text)
+        if hit:
+            return "severe language"
+        if len(_CONTROL.findall(text)) > MAX_CONTROL_CODES:
+            return "control-code flooding"
+        if _ADVERT.search(text):
+            return "advertising"
+        return None
+
     def check_join(self, channel: str, nick: str) -> bool:
         """Join/part cycling: rejoining repeatedly to spam the room's join
         messages. The raid guard counts DISTINCT users, so one person doing it
