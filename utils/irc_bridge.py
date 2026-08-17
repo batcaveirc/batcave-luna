@@ -566,7 +566,14 @@ class IRCBridge:
                 # Reclaim our proper nick if we connected with a fallback (_)
                 self._raw(f"NICK {config.IRC_NICK}")
                 time.sleep(0.3)
-            self._raw(f"MODE {config.IRC_NICK} +i")   # invisible — fewer unsolicited DMs
+            # +g (callerid) refuses private messages from anyone not on our
+            # accept list, and +R from anyone unregistered. Both are enforced by
+            # the SERVER, so a DM flood never reaches our socket and cannot get
+            # us killed for excess flood — a bot-side ignore would still have to
+            # read every line first. Verified against this network: services are
+            # exempt, so ChanServ and NickServ still get through.
+            # +i keeps us out of unsolicited /who scans.
+            self._raw(f"MODE {config.IRC_NICK} +giR")
             # Re-join ALL mapped IRC channels
             for ch in self.all_channels():
                 self._raw(f"JOIN {ch}")
