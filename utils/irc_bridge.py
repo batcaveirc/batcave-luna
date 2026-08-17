@@ -271,10 +271,20 @@ class IRCBridge:
         return self._hosts.get(nick.lower(), "")
 
     def has_prefix(self, irc_channel: str, nick: str) -> bool:
-        """True if the nick carries an operator-ish prefix in that channel."""
+        """True if the nick carries an operator-ish prefix in that channel.
+
+        If we have no record at all, ask the server for a fresh NAMES. Our view
+        can be stale — a mode set while we were reconnecting, a nick change we
+        missed — and silently answering "not an operator" from an empty cache
+        refuses someone who plainly is one.
+        """
+        key = f"{irc_channel.lower()}|{nick.lower()}"
         with self._nicks_lock:
-            pfx = self._prefixes.get(f"{irc_channel.lower()}|{nick.lower()}", "")
-        return bool(re.search(r"[~&@%]", pfx))
+            pfx = self._prefixes.get(key)
+        if pfx is None and self._connected:
+            self._raw(f"NAMES {irc_channel}")
+            return False
+        return bool(re.search(r"[~&@%]", pfx or ""))
 
     def is_nick_in_channel(self, nick: str, irc_channel: str = "") -> bool:
         ch = (irc_channel or self._default_irc_channel()).lower()
@@ -648,6 +658,17 @@ class IRCBridge:
             # for hours because nothing noticed it was no longer itself:
             # identifying early narrows the race but cannot remove it, so the
             # missing half is recovery.
+            # Status follows the person, not the string. Renaming used to drop
+            # every prefix we knew, so an operator who changed nick instantly
+            # stopped being recognised as one.
+            with self._nicks_lock:
+                for key in [k for k in self._prefixes if k.endswith(f"|{old_nick.lower()}")]:
+                    chan = key.rsplit("|", 1)[0]
+                    self._prefixes[f"{chan}|{new_nick.lower()}"] = self._prefixes.pop(key)
+                host = self._hosts.pop(old_nick.lower(), None)
+                if host:
+                    self._hosts[new_nick.lower()] = host
+
             if old_nick.lower() == self._nick.lower():
                 self._nick = new_nick
                 if new_nick.lower() != config.IRC_NICK.lower():
