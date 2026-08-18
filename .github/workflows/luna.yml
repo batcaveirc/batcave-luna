@@ -48,6 +48,7 @@ jobs:
           IRC_SERVER: ${{ secrets.IRC_SERVER || 'irc.hybridirc.com' }}
           IRC_PORT: ${{ secrets.IRC_PORT || '6697' }}
           IRC_NICK: ${{ secrets.IRC_NICK || 'Luna1' }}
+          IRC_REALNAME: ${{ secrets.IRC_REALNAME || 'Keeping the night company' }}
           # The relayed room. Only this one crosses to Discord.
           IRC_CHANNEL: ${{ secrets.IRC_CHANNEL || '#🅱🅰🆃🅲🅰🆅🅴' }}
           # Joined and moderated, but NOT relayed. Use $ircjoin in Discord to

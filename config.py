@@ -44,7 +44,7 @@ IRC_SSL           = True
 IRC_NICK          = os.getenv("IRC_NICK",          "Luna")
 IRC_NICKSERV_PASS = os.getenv("IRC_NICKSERV_PASS", "")
 IRC_CHANNEL       = os.getenv("IRC_CHANNEL",       "#BatCave")
-IRC_REALNAME      = "Luna — Moon Witch of the BatCave"
+IRC_REALNAME      = os.getenv("IRC_REALNAME", "Keeping the night company")
 
 # ── AI ────────────────────────────────────────────────────────────────────────
 

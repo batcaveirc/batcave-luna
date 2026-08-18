@@ -573,7 +573,10 @@ class IRCBridge:
             # read every line first. Verified against this network: services are
             # exempt, so ChanServ and NickServ still get through.
             # +i keeps us out of unsolicited /who scans.
-            self._raw(f"MODE {config.IRC_NICK} +giR")
+            # +I hides our channel list from other people's WHOIS. No -x: +x is
+            # the cloak, and removing it would expose the runner's real address.
+            self._raw(f"MODE {config.IRC_NICK} +gIiR")
+            self._raw("PRIVMSG HostServ :ON")     # reapply the vhost
             # Re-join ALL mapped IRC channels
             for ch in self.all_channels():
                 self._raw(f"JOIN {ch}")
