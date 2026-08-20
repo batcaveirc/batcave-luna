@@ -51,6 +51,13 @@ _ADVERT = re.compile(
 # IRC formatting: colour, bold, italic, underline, reverse, reset.
 _CONTROL = re.compile(r"[\x02\x0F\x11\x16\x1D\x1E\x1F]|\x03\d{0,2}(,\d{1,2})?")
 
+# Ordinary profanity, used only when standing in for an absent peer. Kept in a
+# secret rather than in this public repo, and empty by default — with no list,
+# failover simply falls back to the gap checks, which is the safe direction.
+_BADWORDS = {
+    w.strip().lower() for w in os.getenv("BADWORDS", "").split(",") if w.strip()
+}
+
 # Zero-width and other invisible joiners used to split words apart.
 _INVISIBLE = re.compile(r"[​-‏‪-‮⁠-⁤﻿­]")
 
@@ -112,6 +119,9 @@ class Moderator:
             "chanserv", "nickserv", "chanbot", "dracula", "vampire", "luna1",
             config.IRC_NICK.lower(),
         }
+        # The primary moderator. Luna covers only the gaps while it is here,
+        # and the whole job while it is not.
+        self._peer = os.getenv("PEER_BOT", "Dracula")
 
     # ── helpers ────────────────────────────────────────────────────────────
     def _exempt(self, nick: str, channel: str) -> bool:
@@ -148,11 +158,45 @@ class Moderator:
             self.bridge._queue(
                 channel, f"\x0306{nick}: {reason} ({n}/{WARN_LIMIT}).\x03")
 
+    # ── failover ───────────────────────────────────────────────────────────
+    def _peer_present(self, channel: str) -> bool:
+        """Is the primary moderator actually in this room right now?
+
+        Two bots enforcing the same rule is worse than either alone, so Luna
+        normally stays on the gaps. But a bot that is offline moderates
+        nothing, and this one restarts every six hours and occasionally lands
+        on a blocked address — so when the peer is absent she has to be able to
+        do the whole job rather than politely deferring to nobody.
+        """
+        try:
+            here = {n.lower() for n in self.bridge.get_channel_nicks(channel)}
+        except Exception:
+            return True          # unsure: assume covered, stay on the gaps
+        return self._peer.lower() in here
+
+    def _word_hit(self, text: str) -> Optional[str]:
+        """The plain word filter, used ONLY while standing in for the peer."""
+        if not _BADWORDS:
+            return None
+        flat = re.sub(r"[^a-z ]", " ", deconfuse(text).lower())
+        for w in flat.split():
+            if w in _BADWORDS:
+                return w
+        return None
+
     # ── checks ─────────────────────────────────────────────────────────────
     def check_message(self, channel: str, nick: str, text: str) -> bool:
         """Returns True if Luna acted (caller should stop processing)."""
         if not self.enabled or self._exempt(nick, channel):
             return False
+
+        # Standing in: the peer is gone, so the ordinary word filter is hers
+        # too until it comes back.
+        if not self._peer_present(channel):
+            hit = self._word_hit(text)
+            if hit:
+                self._act(channel, nick, "language")
+                return True
 
         # 1. Evasion. Only flag when folding the text CHANGES it and the folded
         #    form hits a severe word — otherwise ordinary non-English writing

@@ -49,12 +49,20 @@ jobs:
           IRC_PORT: ${{ secrets.IRC_PORT || '6697' }}
           IRC_NICK: ${{ secrets.IRC_NICK || 'Luna1' }}
           IRC_REALNAME: ${{ secrets.IRC_REALNAME || 'Keeping the night company' }}
-          # The relayed room. Only this one crosses to Discord.
+          # The primary room.
           IRC_CHANNEL: ${{ secrets.IRC_CHANNEL || '#🅱🅰🆃🅲🅰🆅🅴' }}
-          # Joined and moderated, but NOT relayed. Use $ircjoin in Discord to
-          # start relaying one of these — presence and publication are separate
-          # decisions and the second should always be deliberate.
-          IRC_EXTRA_CHANNELS: ${{ secrets.IRC_EXTRA_CHANNELS || '#batcave' }}
+          # Joined but NOT relayed. Empty now that both rooms bridge.
+          IRC_EXTRA_CHANNELS: ${{ secrets.IRC_EXTRA_CHANNELS }}
+          # Both rooms relay now, each labelled by name so a Discord reader can
+          # tell which one they are answering. Format: #irc=discord-channel
+          EXTRA_BRIDGES: ${{ secrets.EXTRA_BRIDGES || '#batcave=batcave' }}
+          ROOM_LABELS: ${{ secrets.ROOM_LABELS || '#batcave=batcave,#🅱🅰🆃🅲🅰🆅🅴=emoji' }}
+          # Who the primary moderator is. Luna covers only the gaps while this
+          # bot is in the room, and the whole job while it is not.
+          PEER_BOT: ${{ secrets.PEER_BOT || 'Dracula' }}
+          # Used ONLY when standing in for an absent peer. Empty = failover
+          # falls back to the gap checks, which is the safe direction.
+          BADWORDS: ${{ secrets.BADWORDS }}
 
           # Auto-moderation covering the gaps Dracula cannot see. Off unless
           # turned on with $mod on, or this secret set to "on".

@@ -54,6 +54,24 @@ def _wrap(text: str, size: int = 380) -> List[str]:
     return out or [""]
 
 
+# Two IRC rooms now relay into Discord, so "[Portal]" no longer says anything
+# useful — the reader cannot tell which room they are answering. Label by room.
+_ROOM_LABELS = {
+    lbl.split("=")[0].strip().lower(): lbl.split("=")[1].strip()
+    for lbl in os.getenv("ROOM_LABELS", "").split(",") if "=" in lbl
+}
+
+
+def _room_label(irc_channel: str) -> str:
+    """A short, readable name for the room a message came from."""
+    ch = (irc_channel or "").lower()
+    if ch in _ROOM_LABELS:
+        return _ROOM_LABELS[ch]
+    bare = ch.lstrip("#")
+    # An emoji-named room is unreadable as a label, so fall back to a word.
+    return bare if bare.isascii() and bare else "emoji"
+
+
 def numeric(line: str) -> str:
     """The server numeric of a line, or "".
 
@@ -97,15 +115,19 @@ class IRCBridge:
         if _d_def and _i_def:
             self._add_mapping(_d_def, _i_def)
 
-        # Channels Luna JOINS but does not relay. Moderation runs in these;
-        # nothing said there crosses to Discord. A room only starts relaying
-        # when someone runs $ircjoin for it on the Discord side, which keeps
-        # "she is present" and "this room is public elsewhere" separate
-        # decisions — the second one should always be deliberate.
+        # Channels Luna joins but does not relay. Kept for rooms that should
+        # stay off Discord; both BatCave rooms are bridged now, each labelled
+        # by name so a reader knows which one they are answering.
         self._extra: Set[str] = {
             c.strip() if c.strip().startswith("#") else f"#{c.strip()}"
             for c in os.getenv("IRC_EXTRA_CHANNELS", "").split(",") if c.strip()
         }
+        for pair in os.getenv("EXTRA_BRIDGES", "").split(","):
+            if "=" in pair:
+                irc_ch, disc_ch = (x.strip() for x in pair.split("=", 1))
+                if irc_ch and disc_ch:
+                    self._add_mapping(disc_ch, irc_ch)
+                    self._extra.discard(irc_ch)
 
         # ── Per-channel nick tracking ────────────────────────────────────────
         self._nicks: Dict[str, Set[str]] = {}   # irc_ch.lower() → set of nicks
@@ -769,7 +791,7 @@ class IRCBridge:
                 else:
                     if relay_state.is_enabled(RELAY_TO_DISCORD):
                         self._relay_to_discord(
-                            f"**[Portal]** `{nick}`: {message}",
+                            f"**[{_room_label(target)}]** `{nick}`: {message}",
                             discord_channel=disc_ch,
                         )
                         relay_state.stats.record_message()
