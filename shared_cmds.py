@@ -34,7 +34,6 @@ def _csv_env(key: str) -> set:
 
 
 OWNERS_IRC = _csv_env("LUNA_OWNERS_IRC")
-WHITELIST_IRC = _csv_env("LUNA_WHITELIST_IRC")
 OWNER_IDS = {
     int(x) for x in os.getenv("OWNER_IDS", "").replace(" ", "").split(",")
     if x.strip().isdigit()
@@ -78,13 +77,6 @@ def is_discord_authorized(user_id: int) -> bool:
     if not OWNER_IDS:
         return True
     return user_id in OWNER_IDS
-
-
-# ── Data ─────────────────────────────────────────────────────────────────────
-
-
-
-
 
 
 # ── SharedCommands singleton ─────────────────────────────────────────────────
@@ -224,8 +216,6 @@ class SharedCommands:
             return "Bad expression."
 
 
-
-
     def cmd_choose(self, platform, name, args):
         options = [x.strip() for x in (args or "").split(",") if x.strip()]
         if len(options) < 2:
@@ -307,18 +297,3 @@ class SharedCommands:
                     except Exception:
                         pass
                     return
-
-
-
-
-
-
-
-
-
-
-
-
-    # ── Reminder loop ────────────────────────────────────────────────────
-
-
