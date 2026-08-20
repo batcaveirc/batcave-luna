@@ -61,10 +61,17 @@ def is_irc_owner(nick: str, bridge=None, channel: str = "") -> bool:
 
 
 def is_irc_authorized(nick: str) -> bool:
-    if not (OWNERS_IRC or WHITELIST_IRC):
-        return True  # open if unset
-    n = nick.lower()
-    return n in OWNERS_IRC or n in WHITELIST_IRC
+    """Who may use the ORDINARY commands: everyone.
+
+    This used to mean "owners and whitelist only, unless neither is
+    configured". Setting LUNA_OWNERS_IRC therefore switched $help, $ping,
+    $roll and the rest OFF for the entire room, silently — the dispatcher
+    returned None and the bot simply never answered. A list of who is in charge
+    must not double as a list of who is allowed to speak to the bot.
+
+    Restricted commands do their own checking; $mod asks is_irc_owner.
+    """
+    return True
 
 
 def is_discord_authorized(user_id: int) -> bool:
