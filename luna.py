@@ -60,6 +60,7 @@ def _credit() -> str:
 COGS = [
     "cogs.admin_cog",
     "cogs.ai_cog",
+    "cogs.ircmod_cog",
     "cogs.economy_cog",
     "cogs.shared_cog",
     "cogs.social_cog",
@@ -249,31 +250,29 @@ async def help_cmd(ctx):
     em.add_field(
         name  = "🌉 The bridge",
         value = f"`{p}ircping` `{p}ircinfo` `{p}ircbridges` — status\n"
-                f"`{p}ircjoin #irc [#discord]` — bridge a channel *(mod)*\n"
-                f"`{p}ircleave #irc` — remove a bridge *(mod)*\n"
-                f"`{p}ircnicks [#irc]` · `{p}irctopic [#irc]` — who/what is there",
+                f"`{p}ircwho` — who is in the IRC room, and can I act there\n"
+                f"`{p}ircnicks [#irc]` · `{p}irctopic [#irc]` — who/what is there\n"
+                f"`{p}ircjoin #irc [#discord]` · `{p}ircleave #irc` — bridges *(mod)*",
         inline=False,
     )
     em.add_field(
-        name  = "🔧 IRC control *(mod)*",
+        name  = "🔨 Moderate IRC from here *(mod)*",
+        value = f"`{p}op` `{p}deop` `{p}voice` `{p}devoice` <nick>\n"
+                f"`{p}irckick <nick> [reason]` · `{p}ircban <nick> [reason]`\n"
+                f"`{p}mute <nick>` · `{p}unmute <mask>` · `{p}ircunban <mask>`\n"
+                f"*Acts on the IRC room bridged to whichever channel you type in.*",
+        inline=False,
+    )
+    em.add_field(
+        name  = "🔧 Connection *(mod)*",
         value = f"`{p}ircnick <nick>` · `{p}ircreconnect` · "
-                f"`{p}irckick <nick>` · `{p}ircban <nick>`\n"
                 f"`{p}ircraw <cmd>` — raw IRC *(owner)*",
         inline=False,
     )
     em.add_field(
         name  = "🎭 Everyday",
-        value = f"`{p}ai <question>` — ask Luna\n"
-                f"`{p}8ball` `{p}roll` `{p}flip` `{p}choose` `{p}fact` "
-                f"`{p}dadjoke` `{p}quote` `{p}weather`\n"
-                f"`{p}ping` `{p}about` `{p}batstatus` `{p}help`",
-        inline=False,
-    )
-    em.add_field(
-        name  = "🖼️ From the IRC side",
-        value = f"IRC users type `{p}img cats`, `{p}magik <url>` and friends; "
-                f"Luna runs them here and carries the result back. "
-                f"`{p}help all` lists every one.",
+        value = f"`{p}ai <question>` — ask Luna, or just say her name\n"
+                f"`{p}roll` `{p}flip` `{p}choose` `{p}calc` `{p}weather` `{p}ping`",
         inline=False,
     )
     # Discord moderation was removed: Discord does all of it natively, with an

@@ -67,9 +67,10 @@ def _room_label(irc_channel: str) -> str:
     ch = (irc_channel or "").lower()
     if ch in _ROOM_LABELS:
         return _ROOM_LABELS[ch]
-    bare = ch.lstrip("#")
-    # An emoji-named room is unreadable as a label, so fall back to a word.
-    return bare if bare.isascii() and bare else "emoji"
+    # Use the room's own name, emoji and all. Substituting the word "emoji"
+    # made every message from that room read as if it came from somewhere
+    # generic, and there is more than one way a room can be non-ascii.
+    return (irc_channel or "").lstrip("#") or "irc"
 
 
 def numeric(line: str) -> str:
@@ -288,6 +289,12 @@ class IRCBridge:
         return True
 
     # ── Nick / topic queries ──────────────────────────────────────────────────
+
+    @property
+    def nick(self) -> str:
+        """Luna's current IRC nick. Public because callers legitimately need to
+        ask "am I in that room, and am I opped there?" about the bot itself."""
+        return self._nick
 
     def host_of(self, nick: str) -> str:
         return self._hosts.get(nick.lower(), "")
