@@ -160,10 +160,27 @@ class IRCBridge:
         self._hosts: Dict[str, str] = {}   # nick(lower) -> user@host
 
         from utils.moderation import Moderator
+        from utils.watch import Watch
         self.moderator = Moderator(self)
+        # Early warning. Homes are resolved lazily from the bridge map, so it
+        # follows any channel added later with $ircjoin.
+        self.watch = Watch(
+            homes=[getattr(config, "IRC_CHANNEL", "")] + [
+                p.split("=", 1)[0].strip()
+                for p in os.getenv("EXTRA_BRIDGES", "").split(",") if "=" in p
+            ],
+            enabled=not re.match(r"^(0|off|false|no)$",
+                                 os.getenv("WATCH", "on"), re.I),
+        )
 
 
     # ── Mapping helpers ───────────────────────────────────────────────────────
+
+    def _home_rooms(self) -> set:
+        """Rooms that are OURS — the bridged ones. Everything else is a room we
+        are merely sitting in, where Luna listens and does nothing else."""
+        with self._map_lock:
+            return {i.lower() for i in self._d2i.values()}
 
     def _add_mapping(self, discord_ch: str, irc_ch: str):
         """Map a Discord channel to an IRC room, both ways.
@@ -756,6 +773,31 @@ class IRCBridge:
             # would repost the backlog to Discord on every restart, and
             # answering it would have Luna reply to questions from hours ago.
             if self._is_replay(getattr(self, "_last_tags", {})):
+                return
+
+            # ── A room that is not ours: listen only ──
+            # Luna is a guest in the rooms she watches. She never speaks or
+            # moderates there — that is someone else's channel, and acting in it
+            # would get her banned from the very place worth watching. She only
+            # listens for our own rooms being advertised, which is how the last
+            # raid was assembled before any of it arrived.
+            if target.startswith("#") and target.lower() not in self._home_rooms():
+                try:
+                    heard = self.watch.hear(
+                        target, nick, message,
+                        trusted=self.moderator._exempt(nick, target),
+                        abusive=bool(self.moderator._word_hit(message)),
+                    )
+                    if heard and heard["level"] == "alert":
+                        where = ", ".join(self.watch.seen_in(nick)) or target
+                        for home in self._home_rooms():
+                            self._queue(
+                                home,
+                                f"\x0304[WATCH]\x03 \x02{nick}\x02 is {heard['why']} "
+                                f"in {where}. They are not here yet.")
+                        print(f"[watch] {nick} {heard['why']} in {target}")
+                except Exception as e:  # noqa: BLE001
+                    print(f"[irc_bridge] watch error: {e}")
                 return
 
             # ── Channel message ──

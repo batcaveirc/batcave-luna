@@ -52,7 +52,11 @@ jobs:
           # The primary room.
           IRC_CHANNEL: ${{ secrets.IRC_CHANNEL || '#🅱🅰🆃🅲🅰🆅🅴' }}
           # Joined but NOT relayed. Empty now that both rooms bridge.
-          IRC_EXTRA_CHANNELS: ${{ secrets.IRC_EXTRA_CHANNELS }}
+          # Joined but NOT relayed — rooms Luna only listens in, so she can
+          # hear our channel being advertised before a raid arrives. She
+          # never speaks or moderates in someone else's room.
+          IRC_EXTRA_CHANNELS: ${{ secrets.IRC_EXTRA_CHANNELS || '#desiadda,#chatsansar' }}
+          WATCH: ${{ secrets.WATCH || 'on' }}
           # Both rooms relay now, each labelled by name so a Discord reader can
           # tell which one they are answering. Format: #irc=discord-channel
           EXTRA_BRIDGES: ${{ secrets.EXTRA_BRIDGES || '#batcave=🅱🅰🆃🅲🅰🆅🅴' }}
