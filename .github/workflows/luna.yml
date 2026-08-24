@@ -66,6 +66,9 @@ jobs:
 
           # Auto-moderation covering the gaps Dracula cannot see. Off unless
           # turned on with $mod on, or this secret set to "on".
+          # Same ladder as Dracula, so the room behaves identically
+          # whichever bot is awake.
+          DEVOICE_MINUTES: ${{ secrets.DEVOICE_MINUTES || '2' }}
           LUNA_MOD: ${{ secrets.LUNA_MOD || 'off' }}
           LUNA_SEVERE_WORDS: ${{ secrets.LUNA_SEVERE_WORDS }}
           LUNA_WHITELIST_IRC: ${{ secrets.LUNA_WHITELIST_IRC || secrets.WHITELIST }}

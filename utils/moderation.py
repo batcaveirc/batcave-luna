@@ -26,6 +26,7 @@ worst outcome is a kick, and only after a warning for anyone with standing.
 from __future__ import annotations
 
 import os
+import threading
 import re
 import time
 import unicodedata
@@ -42,6 +43,9 @@ MAX_CONTROL_CODES = int(os.getenv("LUNA_MAX_CONTROL", "8"))
 CYCLE_LIMIT = int(os.getenv("LUNA_CYCLE_LIMIT", "4"))       # joins per window
 CYCLE_WINDOW = int(os.getenv("LUNA_CYCLE_WINDOW", "60"))    # seconds
 WARN_LIMIT = int(os.getenv("LUNA_WARN_LIMIT", "2"))
+# Matches Dracula's DEVOICE_MINUTES so the room behaves the same way
+# whichever bot happens to be awake.
+DEVOICE_MINUTES = int(os.getenv("DEVOICE_MINUTES", "2"))
 
 # Invites to elsewhere. Deliberately narrow: a link is not spam, an invite is.
 _ADVERT = re.compile(
@@ -144,19 +148,46 @@ class Moderator:
             return False
 
     def _act(self, channel: str, nick: str, reason: str) -> None:
-        """Warn, then kick on the second offence. Never bans — a false positive
-        that can be undone by rejoining is a very different mistake to one that
-        locks someone out."""
+        """Take the VOICE first, the seat only if it keeps happening.
+
+        Both rooms run +m with everyone auto-voiced, so a de-voice is the
+        punishment the room is actually built around: the offender goes quiet
+        while everyone else carries on, and it costs them two minutes rather
+        than their place. Luna used to jump straight from a spoken warning to a
+        kick, which meant that whenever she was standing in for an absent
+        Dracula the room silently became harsher than when he is there — the
+        opposite of what covering for someone should mean.
+
+        Never bans. A false positive undone by rejoining is a very different
+        mistake to one that locks somebody out.
+        """
         key = f"{channel.lower()}|{nick.lower()}"
         n = self._warns.get(key, 0) + 1
         self._warns[key] = n
-        if n >= WARN_LIMIT:
-            self._warns.pop(key, None)
-            self.bridge.kick_irc(nick, reason, channel)
-            self.bridge._queue(channel, f"\x0306{nick} removed — {reason}.\x03")
-        else:
+
+        if n < WARN_LIMIT:
+            self.bridge.send_raw(f"MODE {channel} -v {nick}")
             self.bridge._queue(
-                channel, f"\x0306{nick}: {reason} ({n}/{WARN_LIMIT}).\x03")
+                channel,
+                f"\x0306{nick}: {reason} — voice back in {DEVOICE_MINUTES}m "
+                f"({n}/{WARN_LIMIT}).\x03")
+            threading.Timer(
+                DEVOICE_MINUTES * 60,
+                self._restore_voice, args=(channel, nick),
+            ).start()
+            return
+
+        self._warns.pop(key, None)
+        self.bridge.kick_irc(nick, reason, channel)
+        self.bridge._queue(channel, f"\x0306{nick} removed — {reason}.\x03")
+
+    def _restore_voice(self, channel: str, nick: str) -> None:
+        """Give the voice back, but only to somebody still in the room."""
+        try:
+            if self.bridge.is_nick_in_channel(nick, channel):
+                self.bridge.send_raw(f"MODE {channel} +v {nick}")
+        except Exception as e:
+            print(f"[moderation] could not restore voice for {nick}: {e}")
 
     # ── failover ───────────────────────────────────────────────────────────
     def _peer_present(self, channel: str) -> bool:

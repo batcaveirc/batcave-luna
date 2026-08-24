@@ -109,6 +109,9 @@ class IRCBridge:
         # irc_channel.lower()         → discord_channel_name
         self._i2d: Dict[str, str] = {}
         self._map_lock = threading.Lock()
+        # Targets we have already complained about, so a missing channel
+        # is reported once rather than on every relayed line.
+        self._missing_targets: Set[str] = set()
 
         # Seed default bridge from config
         _d_def = getattr(config, "BRIDGE_CHANNEL", "").lower()
@@ -885,17 +888,42 @@ class IRCBridge:
 
     async def _post_discord(self, text: str, discord_channel: str = None):
         channel = self._get_bridge_channel(discord_channel)
-        if channel:
-            try:
-                await channel.send(text[:2000])
-            except Exception as e:
-                print(f"[irc_bridge] Discord send error: {e}")
+        if channel is None:
+            # Do NOT drop this silently. A missing Discord channel used to make
+            # a whole room's relay vanish with no error anywhere: #batcave went
+            # across because a channel called "batcave" happened to exist, and
+            # the emoji room did not, and nothing ever said so. Complain once
+            # per target and name what is actually available.
+            want = (discord_channel or getattr(config, "BRIDGE_CHANNEL", "")).lower()
+            if want not in self._missing_targets:
+                self._missing_targets.add(want)
+                have = ", ".join(
+                    sorted(c.name for g in self.bot.guilds for c in g.text_channels)
+                )[:400] if self.bot else "(no guilds yet)"
+                print(f"[irc_bridge] NO DISCORD CHANNEL for '{want}' — relay from that "
+                      f"IRC room is going nowhere. Channels I can see: {have}")
+            return
+        try:
+            await channel.send(text[:2000])
+        except Exception as e:
+            print(f"[irc_bridge] Discord send error: {e}")
 
     def _get_bridge_channel(self, channel_name: str = None):
+        """Find the Discord channel to post into.
+
+        Accepts a numeric channel ID as well as a name. Names are the friendly
+        option and the fragile one: a room called "#🅱🅰🆃🅲🅰🆅🅴" cannot always be
+        reproduced as a Discord channel name, and one character of difference
+        matches nothing. An ID is ASCII, stable, and survives a rename.
+        """
         name = (channel_name or getattr(config, "BRIDGE_CHANNEL", "")).lower()
         if not name:
             return None
-        for guild in self.bot.guilds:
+        if name.isdigit() and self.bot:
+            ch = self.bot.get_channel(int(name))
+            if ch is not None:
+                return ch
+        for guild in (self.bot.guilds if self.bot else []):
             ch = next(
                 (c for c in guild.text_channels if c.name.lower() == name),
                 None,
