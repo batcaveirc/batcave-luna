@@ -55,7 +55,7 @@ jobs:
           IRC_EXTRA_CHANNELS: ${{ secrets.IRC_EXTRA_CHANNELS }}
           # Both rooms relay now, each labelled by name so a Discord reader can
           # tell which one they are answering. Format: #irc=discord-channel
-          EXTRA_BRIDGES: ${{ secrets.EXTRA_BRIDGES || '#batcave=batcave' }}
+          EXTRA_BRIDGES: ${{ secrets.EXTRA_BRIDGES || '#batcave=🅱🅰🆃🅲🅰🆅🅴' }}
           ROOM_LABELS: ${{ secrets.ROOM_LABELS || '#batcave=batcave,#🅱🅰🆃🅲🅰🆅🅴=🅱🅰🆃🅲🅰🆅🅴' }}
           # Who the primary moderator is. Luna covers only the gaps while this
           # bot is in the room, and the whole job while it is not.

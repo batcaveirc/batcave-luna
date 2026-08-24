@@ -166,10 +166,29 @@ class IRCBridge:
     # ── Mapping helpers ───────────────────────────────────────────────────────
 
     def _add_mapping(self, discord_ch: str, irc_ch: str):
+        """Map a Discord channel to an IRC room, both ways.
+
+        Several IRC rooms may feed ONE Discord channel — that is normal when
+        somebody keeps a single channel and reads the room labels. The reverse
+        cannot be: a message typed in Discord has to go to exactly one room.
+
+        So the IRC→Discord direction is many-to-one and always updated, while
+        the Discord→IRC direction keeps the FIRST room registered. Last-wins was
+        the accidental behaviour and it silently handed the reply path to
+        whichever room happened to be parsed last — EXTRA_BRIDGES is read after
+        the primary, so adding a second room would quietly stop Discord replies
+        reaching the primary one.
+        """
         d = discord_ch.lower()
         i = irc_ch if irc_ch.startswith("#") else f"#{irc_ch}"
         with self._map_lock:
-            self._d2i[d] = i
+            existing = self._d2i.get(d)
+            if existing is None:
+                self._d2i[d] = i
+            elif existing.lower() != i.lower():
+                print(f"[irc_bridge] '{d}' already replies to {existing}; {i} will "
+                      f"post INTO it but Discord messages there still go to "
+                      f"{existing}. Give {i} its own Discord channel for two-way.")
             self._i2d[i.lower()] = d
 
     def _remove_mapping_by_irc(self, irc_ch: str):
