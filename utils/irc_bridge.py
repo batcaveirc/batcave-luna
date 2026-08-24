@@ -112,6 +112,7 @@ class IRCBridge:
         # Targets we have already complained about, so a missing channel
         # is reported once rather than on every relayed line.
         self._missing_targets: Set[str] = set()
+        self._warned_no_loop = False
 
         # Seed default bridge from config
         _d_def = getattr(config, "BRIDGE_CHANNEL", "").lower()
@@ -880,7 +881,18 @@ class IRCBridge:
                           discord_channel: str = None):
         """Thread-safe: post a message to the correct Discord bridge channel."""
         if self.loop is None or not self.loop.is_running():
+            # The other silent drop on this path. IRC runs on its own thread and
+            # hands work to Discord's event loop; if that loop is missing or has
+            # stopped, every relayed line was discarded without a word, which
+            # looks identical to "the bridge is fine but nobody is talking".
+            # Say it once — repeating it per message would bury the room's log.
+            if not self._warned_no_loop:
+                self._warned_no_loop = True
+                print("[irc_bridge] NO EVENT LOOP — nothing is reaching Discord. "
+                      "The bridge was started before the Discord client was ready, "
+                      "or the client has stopped.")
             return
+        self._warned_no_loop = False
         asyncio.run_coroutine_threadsafe(
             self._post_discord(text, discord_channel),
             self.loop,
