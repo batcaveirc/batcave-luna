@@ -178,9 +178,18 @@ class IRCBridge:
 
     def _home_rooms(self) -> set:
         """Rooms that are OURS — the bridged ones. Everything else is a room we
-        are merely sitting in, where Luna listens and does nothing else."""
+        are merely sitting in, where Luna listens and does nothing else.
+
+        Read from _i2d, the IRC->Discord direction, because that is the one that
+        holds EVERY bridged room. _d2i is Discord->IRC and must map each Discord
+        channel to exactly one room, so when several IRC rooms feed one Discord
+        channel it keeps only the first. Reading homes from it therefore made
+        #batcave look foreign: Luna took the listen-only path there and returned
+        before reaching her own commands, so $help answered in one room and was
+        silent in the other.
+        """
         with self._map_lock:
-            return {i.lower() for i in self._d2i.values()}
+            return set(self._i2d.keys())
 
     def _add_mapping(self, discord_ch: str, irc_ch: str):
         """Map a Discord channel to an IRC room, both ways.
