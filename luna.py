@@ -248,6 +248,15 @@ async def help_cmd(ctx):
         color       = config.BOT_COLOR,
     )
     em.add_field(
+        name  = "🎯 Which room am I talking to?",
+        value = f"`{p}to` — where messages typed here go, and the alternatives\n"
+                f"`{p}to <#room>` — point this channel at a different IRC room\n"
+                f"*Or start one message with a room name to send just that line "
+                f"there. Two IRC rooms feed this channel and a message can only "
+                f"go to one, so without this the second room is unreachable.*",
+        inline=False,
+    )
+    em.add_field(
         name  = "🌉 The bridge",
         value = f"`{p}ircping` `{p}ircinfo` `{p}ircbridges` — status\n"
                 f"`{p}ircwho` — who is in the IRC room, and can I act there\n"
@@ -272,7 +281,20 @@ async def help_cmd(ctx):
     em.add_field(
         name  = "🎭 Everyday",
         value = f"`{p}ai <question>` — ask Luna, or just say her name\n"
-                f"`{p}roll` `{p}flip` `{p}choose` `{p}calc` `{p}weather` `{p}ping`",
+                f"`{p}roll` `{p}flip` `{p}choose` `{p}calc` `{p}weather` `{p}ping`\n"
+                f"`{p}nicks` — who is in the IRC room · `{p}say <msg>` — cross-post\n"
+                f"`{p}mod on|off` *(ops)* — the automatic cover Dracula cannot see",
+        inline=False,
+    )
+    # These were registered and completely undocumented — the only way to find
+    # them was to read the source, which is not a discovery mechanism.
+    em.add_field(
+        name  = "🔮 The coven",
+        value = f"`{p}tarot` `{p}horo <sign>` `{p}moon` `{p}spell` `{p}spellbook`\n"
+                f"`{p}hex` `{p}selfhex` `{p}bless` `{p}charm` `{p}brew` `{p}ritual`\n"
+                f"`{p}ship <a> <b>` `{p}vibe` `{p}tod` `{p}truth` `{p}dare` "
+                f"`{p}confess`\n"
+                f"`{p}shards` `{p}richest` `{p}sacrifice` `{p}dream` `{p}tea`",
         inline=False,
     )
     # Discord moderation was removed: Discord does all of it natively, with an

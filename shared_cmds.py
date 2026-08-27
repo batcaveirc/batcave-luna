@@ -165,16 +165,32 @@ class SharedCommands:
                 f"{p}calc 5 x 89 · {p}weather [city]"
             )
         if sub in ("mod", "moderation"):
+            # These are the commands the owner asked for and then could not
+            # find: they live in ircmod_cog and were never listed anywhere, so
+            # the only way to know they existed was to have written them.
             return (
-                f"[\x02Moderation\x02] {p}mod on|off (channel operators) — I "
-                f"cover what Dracula cannot see: disguised text, mass pings, "
-                f"colour flooding, adverts, walls of text, join flooding. "
-                f"Warn first, kick second, never a ban."
+                f"[\x02Moderation\x02] From Discord, acting on the room you are "
+                f"pointed at ({p}to): "
+                f"{p}op {p}deop {p}voice {p}devoice <nick> · "
+                f"{p}mute {p}unmute <nick> · "
+                f"{p}irckick <nick> [reason] · {p}ircban {p}ircunban <nick> · "
+                f"{p}ircwho who is in the room. "
+                f"Automatic: {p}mod on|off — I cover what Dracula cannot see: "
+                f"disguised text, mass pings, colour flooding, adverts, walls "
+                f"of text, join flooding. Warn first, kick second, never a ban."
             )
         if sub in ("irc", "bridge"):
+            # $to matters most here. Two IRC rooms feed one Discord channel, so
+            # without it everything typed in Discord goes to whichever room was
+            # configured first and the other is unreachable — which is exactly
+            # what happened to #batcave.
             return (
-                f"[\x02Bridge\x02] {p}ping · {p}nicks who is here · "
-                f"{p}say <msg> cross-post"
+                f"[\x02Bridge\x02] {p}to <#room> — choose which IRC room this "
+                f"Discord channel talks to; {p}to alone shows where messages go. "
+                f"Or start one message with a room name to send just that line "
+                f"there. Also: {p}ping · {p}nicks who is here · {p}say <msg> "
+                f"cross-post · {p}ircbridges {p}ircjoin {p}ircleave {p}irctopic "
+                f"{p}ircnicks {p}ircreconnect"
             )
         # The first line states what Luna is. HybridIRC's relay policy asks
         # that relay bots be clearly identified and that users know their
@@ -185,7 +201,8 @@ class SharedCommands:
             f"(prefix \x02{p}\x02) — "
             f"Talk to me: just say my name, or {p}ai <question> · "
             f"Fun: {p}roll {p}flip {p}choose {p}calc {p}weather · "
-            f"Bridge: {p}ping {p}nicks {p}say · "
+            f"Bridge: {p}to <#room> {p}ping {p}nicks {p}say · "
+            f"Mods: {p}op {p}devoice {p}irckick {p}ircban · "
             f"More: {p}help fun | {p}help bridge | {p}help mod"
         )
 
