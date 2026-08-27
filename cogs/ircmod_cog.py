@@ -60,7 +60,11 @@ class IrcModCog(commands.Cog, name="IRC Moderation"):
         if not bridge.is_connected():
             return None, f"Not connected to IRC. Try `{config.PREFIX}ircreconnect`."
         name = getattr(ctx.channel, "name", "") or ""
-        irc_ch = bridge.get_irc_for_discord(name)
+        # Honour an explicit $to target: moderating from Discord must act on
+        # the room you are actually talking to, not the one the config happened
+        # to register first.
+        irc_ch = (bridge.get_reply_target(name) if hasattr(bridge, "get_reply_target")
+                  else None) or bridge.get_irc_for_discord(name)
         if not irc_ch:
             bridges = ", ".join(f"#{d} → {i}" for i, d in bridge.list_bridges()) or "none"
             return None, (f"**#{name}** is not bridged to an IRC room, so there is "
@@ -94,6 +98,40 @@ class IrcModCog(commands.Cog, name="IRC Moderation"):
         await ctx.send(f"✅ {verb} **{nick}** in `{irc_ch}`.")
 
     # ── Removal ──────────────────────────────────────────────────────────────
+
+    @commands.command(name="to")
+    async def to_room(self, ctx, room: str = ""):
+        """Choose which bridged IRC room this Discord channel talks to.
+
+        Two IRC rooms feed this one Discord channel, and a message typed here
+        can only go to one of them. The default is whichever room was
+        configured first — the emoji room — which is why #batcave could not be
+        reached from Discord at all. This picks.
+        """
+        bridge = self._bridge
+        if bridge is None or not bridge.is_connected():
+            await ctx.send("IRC bridge is not connected.")
+            return
+        name = getattr(ctx.channel, "name", "") or ""
+        rooms = bridge.bridged_rooms()
+        current = bridge.get_reply_target(name)
+
+        if not room:
+            listing = "\n".join(
+                f"{'**→ ' + r + '**' if current and r.lower() == current.lower() else '  ' + r}"
+                for r in rooms) or "  (nothing bridged)"
+            await ctx.send(
+                f"Messages here go to **{current or 'nowhere'}**.\n{listing}\n"
+                f"`{config.PREFIX}to <#room>` to switch, or start a single message "
+                f"with a room name to send just that line there.")
+            return
+
+        want = room if room.startswith("#") else f"#{room}"
+        if bridge.set_reply_target(name, want):
+            await ctx.send(f"Messages typed here now go to **{want}**.")
+        else:
+            await ctx.send(
+                f"**{want}** is not bridged. Available: {', '.join(rooms) or 'none'}")
 
     @commands.command(name="irckick")
     @mod_only()

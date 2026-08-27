@@ -105,6 +105,10 @@ class IRCBridge:
 
         # ── Channel mappings ─────────────────────────────────────────────────
         # discord_channel_name.lower() → irc_channel  (e.g. "batcave" → "#BatCave")
+        # An explicit override of the reply direction, set from Discord with
+        # $to. Kept apart from _d2i so the configured default is never lost and
+        # can be returned to.
+        self._targets: Dict[str, str] = {}
         self._d2i: Dict[str, str] = {}
         # irc_channel.lower()         → discord_channel_name
         self._i2d: Dict[str, str] = {}
@@ -298,19 +302,67 @@ class IRCBridge:
 
     # ── Messaging ─────────────────────────────────────────────────────────────
 
+    def set_reply_target(self, discord_channel: str, irc_channel: str) -> bool:
+        """Point one Discord channel at a DIFFERENT bridged room.
+
+        Two IRC rooms feed one Discord channel here, and _add_mapping keeps the
+        FIRST for the reply direction — so everything typed in Discord went to
+        the emoji room and #batcave could not be reached from Discord at all.
+        That is correct as a default (a message has to go exactly one place) but
+        there was no way to choose the other place.
+
+        This is that choice. It only accepts a room already bridged, so it can
+        redirect but never invent a target.
+        """
+        i = irc_channel if irc_channel.startswith("#") else f"#{irc_channel}"
+        with self._map_lock:
+            if i.lower() not in self._i2d:
+                return False
+            self._targets[discord_channel.lower()] = i
+        return True
+
+    def get_reply_target(self, discord_channel: str) -> Optional[str]:
+        """Where this Discord channel currently sends, and why it is that one."""
+        d = discord_channel.lower()
+        with self._map_lock:
+            return self._targets.get(d) or self._d2i.get(d)
+
+    def bridged_rooms(self) -> list:
+        """Every IRC room this Discord channel can be pointed at."""
+        with self._map_lock:
+            return sorted(self._i2d.keys())
+
     def send_to_irc(self, message: str, discord_channel: str = ""):
         """
         Queue a message to the IRC channel mapped to discord_channel.
-        Falls back to the first mapped channel if discord_channel is unknown.
+
+        An explicit target set with $to wins over the mapping, and a message
+        beginning with a bridged room name goes there for that line only —
+        "#batcave hello" reaches #batcave without changing anything.
         """
         if not self._connected:
             return
-        irc_ch = self.get_irc_for_discord(discord_channel) if discord_channel else None
+        text = message
+        one_off = None
+
+        # "#room rest of the message" — a single line aimed somewhere else.
+        head = text.split(None, 1)
+        if head and head[0].startswith("#"):
+            cand = head[0]
+            with self._map_lock:
+                known = cand.lower() in self._i2d
+            if known and len(head) > 1:
+                one_off = cand
+                text = head[1]
+
+        irc_ch = one_off
+        if not irc_ch and discord_channel:
+            irc_ch = self.get_reply_target(discord_channel)
         if not irc_ch:
             pairs  = self.list_bridges()
             irc_ch = pairs[0][1] if pairs else getattr(config, "IRC_CHANNEL", "")
         if irc_ch:
-            self._queue(irc_ch, message[:400])
+            self._queue(irc_ch, text[:400])
 
     def send_raw(self, cmd: str):
         """Send a raw IRC command. No-op if not connected."""
