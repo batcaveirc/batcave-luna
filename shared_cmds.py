@@ -135,11 +135,35 @@ class SharedCommands:
             return "*Luna narrows her eyes.* Not for you, darling."
         return self._run("discord", username, user_id, cmd, args)
 
+    # Commands that exist only as Discord cogs. Typed on IRC they used to do
+    # NOTHING — no reply, no error, no log — so 48 of the bot's 58 commands
+    # were silently dead there and the only way to find out was to ask a human
+    # why the bot ignored you.
+    DISCORD_ONLY = {
+        "op", "deop", "voice", "devoice", "mute", "unmute", "irckick", "ircban",
+        "ircunban", "ircwho", "ircnicks", "irctopic", "ircjoin", "ircleave",
+        "ircping", "ircinfo", "ircbridges", "ircnick", "ircreconnect", "ircraw",
+        "to", "ai", "about", "batstatus", "tarot", "horo", "moon", "spell",
+        "spellbook", "hex", "selfhex", "bless", "charm", "brew", "ritual",
+        "sacrifice", "seduce", "shards", "richest", "coven", "confess", "dare",
+        "truth", "tod", "dream", "tea", "ship", "vibe",
+    }
+
     def _run(self, platform: str, name: str, user_id, cmd: str, args: str) -> Optional[str]:
         """`_channel` is set by the caller so a command can check op status in
         the room it was typed in."""
         method = getattr(self, f"cmd_{cmd}", None)
         if method is None:
+            # Say something. An unrecognised command that produces silence is
+            # indistinguishable from a broken bot, and that is exactly how this
+            # was reported: "most commands did not work".
+            if platform == "irc":
+                p = config.PREFIX
+                if cmd in self.DISCORD_ONLY:
+                    return (f"{p}{cmd} works from Discord, not from here. "
+                            f"On IRC I answer: {p}help {p}ping {p}roll {p}flip "
+                            f"{p}choose {p}calc {p}weather {p}nicks {p}say {p}mod")
+                return f"I do not know {p}{cmd}. Try {p}help."
             return None
         try:
             return method(platform, name, args)
@@ -201,8 +225,8 @@ class SharedCommands:
             f"(prefix \x02{p}\x02) — "
             f"Talk to me: just say my name, or {p}ai <question> · "
             f"Fun: {p}roll {p}flip {p}choose {p}calc {p}weather · "
-            f"Bridge: {p}to <#room> {p}ping {p}nicks {p}say · "
-            f"Mods: {p}op {p}devoice {p}irckick {p}ircban · "
+            f"Bridge: {p}ping {p}nicks {p}say · "
+            f"From DISCORD only: {p}to {p}op {p}devoice {p}irckick {p}ircban {p}tarot … · "
             f"More: {p}help fun | {p}help bridge | {p}help mod"
         )
 
