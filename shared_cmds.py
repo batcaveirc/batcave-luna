@@ -233,7 +233,7 @@ class SharedCommands:
             f"Talk to me: just say my name, or {p}ai <question> · "
             f"Fun: {p}roll {p}flip {p}choose {p}calc {p}weather · "
             f"Bridge: {p}ping {p}nicks {p}say · "
-            f"From DISCORD only: {p}to {p}op {p}devoice {p}irckick {p}ircban {p}tarot … · "
+            f"From DISCORD only: {p}to {p}op {p}devoice {p}irckick {p}ircban {p}ai … · "
             f"More: {p}help fun | {p}help bridge | {p}help mod"
         )
 

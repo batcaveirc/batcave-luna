@@ -61,12 +61,24 @@ COGS = [
     "cogs.admin_cog",
     "cogs.ai_cog",
     "cogs.ircmod_cog",
-    "cogs.economy_cog",
     "cogs.shared_cog",
     "cogs.social_cog",
-    "cogs.spells_cog",
-    "cogs.tarot_cog",
 ]
+
+# REMOVED, on the owner's instruction to cut what is not needed:
+#
+#   economy_cog  — it cannot work here. Balances live in data/shards.json,
+#                  that directory is not tracked in git, and the runner is
+#                  ephemeral: every job ends and takes the file with it. So
+#                  $shards, $richest and the leaderboard silently reset every
+#                  few hours and always have. A scoreboard that forgets is
+#                  worse than no scoreboard, because people trust it.
+#   tarot_cog    — novelty, and excluded by this file's own description above.
+#   spells_cog   — the same.
+#
+# ai_cog and social_cog are kept deliberately. The docstring says "no AI", but
+# $ai is the thing people actually use Luna for — she answers by name in the
+# room every day — and that line is simply stale.
 
 # ── Events ────────────────────────────────────────────────────────────────────
 
@@ -289,12 +301,9 @@ async def help_cmd(ctx):
     # These were registered and completely undocumented — the only way to find
     # them was to read the source, which is not a discovery mechanism.
     em.add_field(
-        name  = "🔮 The coven",
-        value = f"`{p}tarot` `{p}horo <sign>` `{p}moon` `{p}spell` `{p}spellbook`\n"
-                f"`{p}hex` `{p}selfhex` `{p}bless` `{p}charm` `{p}brew` `{p}ritual`\n"
-                f"`{p}ship <a> <b>` `{p}vibe` `{p}tod` `{p}truth` `{p}dare` "
-                f"`{p}confess`\n"
-                f"`{p}shards` `{p}richest` `{p}sacrifice` `{p}dream` `{p}tea`",
+        name  = "🎲 Social",
+        value = f"`{p}ship <a> <b>` `{p}vibe` `{p}tod` `{p}truth` `{p}dare`\n"
+                f"`{p}confess` `{p}tea` `{p}seduce`",
         inline=False,
     )
     # Discord moderation was removed: Discord does all of it natively, with an
