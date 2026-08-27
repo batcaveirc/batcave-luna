@@ -114,6 +114,13 @@ class SharedCommands:
         pfx = config.PREFIX
         if not text.startswith(pfx):
             return None
+        # ANOTHER BOT'S COMMAND. The standbys use "$$" and Luna uses "$", so
+        # "$$trivia" parses here as prefix + "$trivia" — unknown. That was
+        # harmless while unknown commands were silent; the moment they started
+        # answering, Luna began interrupting every single standby command with
+        # "I do not know $$trivia". Caught in a live test within the hour.
+        if text[len(pfx):].startswith(pfx):
+            return None
         parts = text[len(pfx):].split(None, 1)
         if not parts:
             return None
