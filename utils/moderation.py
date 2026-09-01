@@ -52,6 +52,25 @@ _ADVERT = re.compile(
     r"(discord\.(gg|com/invite)/\S+|irc\.[a-z0-9-]+\.[a-z]{2,}|t\.me/\S+"
     r"|join\s+#\S+\s+on\s+\S+)", re.I)
 
+# OUR OWN network, which the pattern above cannot help but match.
+#
+# Somebody uploaded a picture through the room's own file service and was
+# devoiced for advertising. The URL was
+# "https://kiwiirc.hybridirc.com/files/..." and the rule looks for
+# "irc.<something>.<tld>" to catch invitations to other networks — which
+# "irc.hybridirc.com", sitting inside our own hostname, matches perfectly.
+#
+# So every link to the network we are ON read as an invitation to leave it,
+# including the webchat client and the file host the room actually uses.
+HOME_DOMAIN = os.getenv("IRC_SERVER", "irc.hybridirc.com").split(".")[-2:]
+HOME_DOMAIN = ".".join(HOME_DOMAIN) if len(HOME_DOMAIN) == 2 else "hybridirc.com"
+_OURS = re.compile(r"https?://\S*" + re.escape(HOME_DOMAIN) + r"\S*", re.I)
+
+
+def _strip_home_links(text: str) -> str:
+    """Remove links to our own network before looking for invitations elsewhere."""
+    return _OURS.sub(" ", text or "")
+
 # IRC formatting: colour, bold, italic, underline, reverse, reset.
 _CONTROL = re.compile(r"[\x02\x0F\x11\x16\x1D\x1E\x1F]|\x03\d{0,2}(,\d{1,2})?")
 
@@ -292,7 +311,8 @@ class Moderator:
             return "severe language"
         if len(_CONTROL.findall(text)) > MAX_CONTROL_CODES:
             return "control-code flooding"
-        if _ADVERT.search(text):
+        # Our own network's links are stripped first — see _strip_home_links.
+        if _ADVERT.search(_strip_home_links(text)):
             return "advertising"
         return None
 
