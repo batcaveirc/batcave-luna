@@ -127,5 +127,44 @@ c("and every command it defines is in the help",
   all(f"{cmd}" in luna for cmd in ("warn", "warnings", "clearwarns", "seen", "slowmode")),
   "advertised-but-dead and built-but-unadvertised are the same bug twice")
 
+print("\n— refused at the door, not retried forever —")
+# Measured 2026-09-13: one run made 154 connection attempts in five hours, 121 of
+# them ending in "TLS/SSL connection has been closed (EOF)". Luna was absent from
+# the room the whole time and the job looked perfectly healthy. Hammering a server
+# that is dropping the handshake cannot fix an address block, and that pattern has
+# already cost this project a GitHub account once.
+ns2 = {}
+_tree = ast.parse(bridge_src)
+for _node in _tree.body:
+    _want = (
+        isinstance(_node, ast.FunctionDef) and _node.name == "_refused_at_the_door"
+    ) or (
+        isinstance(_node, ast.Assign)
+        and any(getattr(t, "id", "").startswith("_REFUS") for t in _node.targets)
+    )
+    if _want:
+        exec(ast.get_source_segment(bridge_src, _node), ns2)  # noqa: S102
+refused = ns2["_refused_at_the_door"]
+c("an immediate TLS EOF is recognised as a refusal",
+  refused(Exception("TLS/SSL connection has been closed (EOF) (_ssl.c:1010)")),
+  "this is the exact string the live log carried 121 times")
+c("so is a refused connection", refused(ConnectionRefusedError("Connection refused")))
+c("and a timeout", refused(TimeoutError("timed out")))
+c("and an explicit line ban", refused(Exception("Closing link: Z-lined")))
+c("but an ordinary mid-session drop is NOT",
+  not refused(Exception("Ping timeout")) and not refused(Exception("broken pipe")),
+  "a session that was working and dropped must keep its fast retry")
+c("the long wait is at least ten minutes",
+  ns2["_REFUSED_DELAY"] >= 600, str(ns2["_REFUSED_DELAY"]))
+c("and a couple of flukes do not trigger it",
+  ns2["_REFUSALS_BEFORE_SLOWDOWN"] >= 2, str(ns2["_REFUSALS_BEFORE_SLOWDOWN"]))
+c("it only applies BEFORE we ever registered",
+  "not self._ever_registered and _refused_at_the_door" in bridge_src,
+  "a drop after a working session is a different fault with a different fix")
+c("registering clears it", "the address is fine" in bridge_src)
+c("and it says so out loud, once",
+  "refusing this ADDRESS" in bridge_src,
+  "five hours of silent failure is how this went unnoticed")
+
 print(f"\n{fails} FAILED" if fails else "\nALL PASS")
 sys.exit(1 if fails else 0)

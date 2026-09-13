@@ -27,6 +27,27 @@ from utils.staralign_relay import relay_to_staralign
 
 _RECONNECT_DELAY_MIN = 15    # initial reconnect delay (seconds)
 _RECONNECT_DELAY_MAX = 120   # cap for exponential backoff
+# When the server will not even let us finish connecting, the address is the
+# problem and no amount of retrying changes it. Wait a long time instead.
+_REFUSED_DELAY = 1800                # 30 minutes between attempts once refused
+_REFUSALS_BEFORE_SLOWDOWN = 3        # a couple of flukes are not a block
+
+
+def _refused_at_the_door(exc) -> bool:
+    """Does this failure mean the SERVER would not have us, rather than a glitch?
+
+    The observed shape is an immediate TLS EOF: the handshake is closed rather
+    than answered. Connection refused and timeouts count too — all of them mean
+    nothing we send next will be read.
+    """
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(
+        sign in text
+        for sign in (
+            "closed (eof)", "eof occurred", "connection refused", "connection reset",
+            "timed out", "unreachable", "z-lined", "k-lined", "g-lined", "banned",
+        )
+    )
 _SOCKET_TIMEOUT      = 30    # detect dead connections fast
 _SEND_DELAY          = 0.5   # seconds between outbound IRC messages (rate-limit)
 
@@ -100,6 +121,8 @@ class IRCBridge:
         self._thread        = None
         self._sender_thread = None
         self._connected     = False
+        self._ever_registered = False    # did we get past 001 this attempt?
+        self._refusals      = 0         # consecutive refusals at the door
         self._force_reconnect = False
         self._last_ping     = time.time()
 
@@ -568,11 +591,40 @@ class IRCBridge:
         delay = _RECONNECT_DELAY_MIN
         while self._running:
             self._force_reconnect = False
+            self._ever_registered = False
             try:
                 self._connect_and_loop()
                 delay = _RECONNECT_DELAY_MIN   # reset backoff on clean exit
             except Exception as e:
                 print(f"[irc_bridge] Disconnected: {e}")
+                # Refused at the door, or dropped after a real session?
+                #
+                # Measured on 2026-09-13: one run made 154 connection attempts in
+                # five hours and 121 of them ended in "TLS/SSL connection has been
+                # closed (EOF)" — the server closing the handshake because it does
+                # not accept this address. Luna was absent from the room the whole
+                # time while the job looked perfectly healthy.
+                #
+                # Retrying every two minutes against a host that is dropping us
+                # achieves nothing and is exactly the pattern that cost this
+                # project a GitHub account: it reads as an attack. So a failure
+                # that arrives BEFORE we were ever registered is treated as an
+                # address-level refusal and backed off hard, while a drop after a
+                # real session keeps the fast retry it needs.
+                if not self._ever_registered and _refused_at_the_door(e):
+                    self._refusals += 1
+                    if self._refusals == _REFUSALS_BEFORE_SLOWDOWN:
+                        print(
+                            "[irc_bridge] The server is closing the connection before "
+                            "registration, which means it is refusing this ADDRESS, not "
+                            "this bot — a datacenter range on a blocklist, most likely. "
+                            "Backing off hard: hammering it cannot fix an IP block and "
+                            "looks like an attack. A fresh runner gets a fresh address."
+                        )
+                    if self._refusals >= _REFUSALS_BEFORE_SLOWDOWN:
+                        delay = _REFUSED_DELAY
+                else:
+                    self._refusals = 0
             if not self._running:
                 break
             self._connected = False
@@ -582,7 +634,8 @@ class IRCBridge:
             else:
                 print(f"[irc_bridge] Reconnecting in {delay}s...")
                 time.sleep(delay)
-                delay = min(delay * 2, _RECONNECT_DELAY_MAX)
+                delay = min(delay * 2, _REFUSED_DELAY if self._refusals
+                            >= _REFUSALS_BEFORE_SLOWDOWN else _RECONNECT_DELAY_MAX)
 
     def _connect_and_loop(self):
         raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -686,6 +739,8 @@ class IRCBridge:
         # 001 = registered
         if num == "001":
             current_nick = config.IRC_NICK
+            self._ever_registered = True
+            self._refusals = 0          # the address is fine; forget the backoff
             print(f"[irc_bridge] Registered as {current_nick}")
             if config.IRC_NICKSERV_PASS:
                 self._raw(f"PRIVMSG NickServ :IDENTIFY {config.IRC_NICKSERV_PASS}")
