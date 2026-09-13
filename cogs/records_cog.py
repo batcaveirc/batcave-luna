@@ -17,7 +17,7 @@ can actually work rather than duplicated where it cannot:
   $warnings <nick>          the whole history, with who gave it and when
   $clearwarns <nick>        wipe somebody's record (mod)
   $seen <nick>              when the room last heard from them
-  $slowmode <n>             hold the room's flood limit to n seconds
+  $slowmode <n>             one line per n seconds, enforced by DEVOICING
 
 The store is an append-only ledger in one Discord channel: one line per record,
 read back on demand. Not a file — the runner's disk is destroyed with the job,
@@ -55,6 +55,13 @@ _RELAY_RE = re.compile(r"^\*\*\[(?P<room>[^\]]{1,64})\]\*\*\s+`(?P<nick>[^`]{1,3
 _LEDGER_CHANNEL = os.getenv("RECORD_CHANNEL", "") or getattr(config, "ALERT_CHANNEL", "bot-logs")
 _SCAN = int(os.getenv("RECORD_SCAN", "4000"))
 _SEEN_DAYS = int(os.getenv("SEEN_WINDOW_DAYS", "30"))
+# Never rate-limited: services, the network's own bot, and our own side of the
+# pair. Dracula moderating a room while Luna devoices Dracula is a fight between
+# two bots that a human then has to break up.
+_NEVER_TOUCH = {
+    "chanserv", "nickserv", "hostserv", "operserv", "botserv", "memoserv",
+    "chanbot", "dracula", "luna1", "luna",
+}
 
 
 def _ago(seconds: float) -> str:
@@ -74,6 +81,14 @@ class RecordsCog(commands.Cog, name="Records"):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._slow: dict[str, int] = {}                    # irc room -> seconds
+        self._spoke: dict[tuple[str, str], float] = {}     # (room, nick) -> last line
+        self._told: dict[tuple[str, str], float] = {}      # (room, nick) -> last devoice
+        self._never = {
+            n.strip().lower()
+            for n in (os.getenv("LUNA_WHITELIST_IRC", "") or "").split(",")
+            if n.strip()
+        }
 
     # ── plumbing ─────────────────────────────────────────────────────────────
 
@@ -242,35 +257,88 @@ class RecordsCog(commands.Cog, name="Records"):
         ago = _ago((datetime.now(timezone.utc) - best).total_seconds())
         await ctx.send(f"**{nick}** was last heard in **{room}** — {ago}.")
 
-    # ── slowmode ─────────────────────────────────────────────────────────────
+    # ── slow mode ────────────────────────────────────────────────────────────
 
     @commands.command(name="slowmode")
     @mod_only()
     async def slowmode(self, ctx: commands.Context, seconds: int = 0) -> None:
-        """Limit how fast the IRC room can be typed in. 0 turns it off."""
+        """One line per n seconds per person in the bridged IRC room. 0 lifts it.
+
+        Enforced by DEVOICING whoever goes faster, never by kicking them.
+        """
         bridge = self._bridge()
         if bridge is None:
             await ctx.send("The IRC bridge is not running.")
             return
-        room = bridge.get_irc_for_discord(ctx.channel.name) if hasattr(
-            bridge, "get_irc_for_discord") else None
-        room = room or getattr(config, "IRC_CHANNEL", "")
+        room = bridge.get_irc_for_discord(ctx.channel.name) or getattr(config, "IRC_CHANNEL", "")
         if not room:
             await ctx.send("I could not work out which IRC room this channel maps to.")
             return
         if seconds <= 0:
-            bridge.send_raw(f"MODE {room} -f")
+            self._slow.pop(room.lower(), None)
             await ctx.send(f"Slow mode off in `{room}`.")
             return
-        n = max(1, min(60, seconds))
-        # InspIRCd's flood mode: more than one line per n seconds and the server
-        # blocks the excess. Chosen over a bot-side throttle because the server
-        # enforces it on everybody, including while Luna is between restarts.
-        bridge.send_raw(f"MODE {room} +f [1t#{n}]")
+        n = max(1, min(120, seconds))
+        self._slow[room.lower()] = n
         await ctx.send(
-            f"Slow mode on in `{room}` — about one line per **{n}s** per person. "
+            f"Slow mode on in `{room}` — one line per **{n}s** per person. Anyone faster "
+            f"loses voice and a moderator is told; nobody is kicked. "
             f"`{config.PREFIX}slowmode 0` to lift it."
         )
+
+    @commands.Cog.listener("on_message")
+    async def _watch_rate(self, message: discord.Message) -> None:
+        """Every IRC line arrives here, because Luna relays it into Discord.
+
+        Reading the relay instead of the socket means this needs no change to the
+        bridge and no second connection: the line is already in a channel by the
+        time it matters.
+
+        Deliberately a DEVOICE. InspIRCd's own flood mode (+f) kicks, which is
+        precisely what the room objected to — and the first version of this
+        command sent "+f [1t#n]", which is UnrealIRCd syntax and would have been
+        rejected by this server with no visible error at all.
+        """
+        if not self._slow or message.author.id != self.bot.user.id:
+            return
+        hit = _RELAY_RE.match(message.content or "")
+        if not hit:
+            return
+        bridge = self._bridge()
+        if bridge is None:
+            return
+        room = bridge.get_irc_for_discord(message.channel.name) or ""
+        gap = self._slow.get(room.lower())
+        if not gap:
+            return
+        nick = hit.group("nick")
+        low = nick.lower()
+        if low in _NEVER_TOUCH or low in self._never:
+            return
+        now = time.time()
+        last = self._spoke.get((room.lower(), low), 0.0)
+        self._spoke[(room.lower(), low)] = now
+        if not last or now - last >= gap:
+            return
+        # Once. Repeating a devoice they already have is a mode war with nobody.
+        key = (room.lower(), low)
+        if now - self._told.get(key, 0.0) < 300:
+            return
+        self._told[key] = now
+        bridge.send_raw(f"MODE {room} -v {nick}")
+        bridge.send_raw(
+            f"NOTICE {nick} :[MOD] {room} is in slow mode — about one line every "
+            f"{gap}s. Your voice is off for now; a moderator can give it straight back."
+        )
+        alert = self._ledger_channel()
+        if alert is not None:
+            try:
+                await alert.send(
+                    f"🐌 **{nick}** went faster than slow mode allows in `{room}` "
+                    f"— devoiced, not kicked. `/mode {room} +v {nick}` to undo."
+                )
+            except discord.Forbidden:
+                pass
 
 
 async def setup(bot: commands.Bot) -> None:

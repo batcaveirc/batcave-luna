@@ -314,7 +314,8 @@ async def help_cmd(ctx):
         value = f"`{p}warn <nick> <reason>` *(mod)* — a warning that survives restarts\n"
                 f"`{p}warnings <nick>` — the whole history, who gave it and when\n"
                 f"`{p}clearwarns <nick>` *(mod)* · `{p}seen <nick>` — last heard from\n"
-                f"`{p}slowmode <secs>` *(mod)* — one line per n seconds, 0 to lift",
+                f"`{p}slowmode <secs>` *(mod)* — one line per n seconds in the IRC\n"
+                "room this channel bridges to; anyone faster is **devoiced**, never kicked",
         inline=False,
     )
     em.add_field(

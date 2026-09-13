@@ -92,9 +92,19 @@ c("a warning is delivered by NOTICE, never to the channel",
 c("and the bridge methods it calls really exist",
   "def send_raw" in bridge_src and "def get_irc_for_discord" in bridge_src,
   "guessing at bridge attribute names has already shipped one silent half-answer")
-c("slowmode uses the server's own flood mode",
-  '+f [1t#' in src,
-  "server-side, so it holds while Luna is between restarts")
+c("slowmode never SENDS a flood mode this server would reject",
+  not re.search(r"send_raw\([^)]*\+f", src),
+  "'+f [1t#n]' is UnrealIRCd syntax; InspIRCd rejects it silently, and its own +f kicks")
+c("it enforces by DEVOICING, not kicking",
+  'MODE {room} -v {nick}' in src and 'KICK' not in src,
+  "a kick is the thing the room objected to")
+c("and it acts once, not in a mode war",
+  "self._told" in src and "< 300" in src)
+c("services and our own bots are never rate-limited",
+  '"chanserv"' in src and '"dracula"' in src,
+  "Luna devoicing Dracula is two bots fighting for a human to break up")
+c("the rate watcher reads the RELAY, so it needs no socket of its own",
+  'on_message' in src and '_RELAY_RE.match(message.content' in src)
 
 print("\n— $seen reads the relay, so it needs no store —")
 c("it parses the bridge's relay format",
