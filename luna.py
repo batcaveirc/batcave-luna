@@ -67,6 +67,11 @@ COGS = [
     # ordinary reaches it. Evidence only — Dracula applies every gate itself.
     "cogs.attendance_cog",
     "cogs.ircmod_cog",
+    # The moderator memory neither bot has. Dracula's warns, strike counts and
+    # cross-room sightings all live in maps that die with its process every six
+    # hours, so "has this person been warned before?" had no true answer. Discord
+    # keeps what it is told, so the record lives here.
+    "cogs.records_cog",
     "cogs.shared_cog",
     "cogs.social_cog",
 ]
@@ -302,6 +307,14 @@ async def help_cmd(ctx):
                 f"`{p}roll` `{p}flip` `{p}choose` `{p}calc` `{p}weather` `{p}ping`\n"
                 f"`{p}nicks` — who is in the IRC room · `{p}say <msg>` — cross-post\n"
                 f"`{p}mod on|off` *(ops)* — the automatic cover Dracula cannot see",
+        inline=False,
+    )
+    em.add_field(
+        name  = "📋 Records",
+        value = f"`{p}warn <nick> <reason>` *(mod)* — a warning that survives restarts\n"
+                f"`{p}warnings <nick>` — the whole history, who gave it and when\n"
+                f"`{p}clearwarns <nick>` *(mod)* · `{p}seen <nick>` — last heard from\n"
+                f"`{p}slowmode <secs>` *(mod)* — one line per n seconds, 0 to lift",
         inline=False,
     )
     em.add_field(
