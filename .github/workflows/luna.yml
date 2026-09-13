@@ -37,6 +37,20 @@ jobs:
           DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
           OWNER_IDS: ${{ secrets.OWNER_IDS }}
           IRC_NICKSERV_PASS: ${{ secrets.IRC_NICKSERV_PASS }}
+          # Shared with Dracula, and with nothing else. Luna counts how many
+          # separate days each IRC nick was heard on out of the relayed history
+          # and signs the tally with this; Dracula refuses any report that
+          # cannot prove it holds the same value. Unset means no report is sent
+          # at all — an unsigned list of "people you should trust" is the most
+          # useful thing an attacker could hand a moderation bot.
+          PEER_SECRET: ${{ secrets.PEER_SECRET }}
+          # How far back to count, how often to report, and who to report to.
+          ATTEND_WINDOW_DAYS: ${{ secrets.ATTEND_WINDOW_DAYS || '30' }}
+          ATTEND_EVERY_MIN: ${{ secrets.ATTEND_EVERY_MIN || '180' }}
+          ATTEND_REPORT_TO: ${{ secrets.ATTEND_REPORT_TO || 'Dracula' }}
+          # Relayed names that are not people — our own bots, mostly. Services
+          # are already excluded in code.
+          ATTEND_IGNORE: ${{ secrets.ATTEND_IGNORE }}
           # Hosted AI for !!ai. Placeholder until the key is added — without
           # it the command says so plainly instead of erroring.
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}

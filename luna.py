@@ -60,6 +60,12 @@ def _credit() -> str:
 COGS = [
     "cogs.admin_cog",
     "cogs.ai_cog",
+    # Counts the days each IRC nick was heard on, out of the relayed history
+    # Discord already keeps, and hands the tally to Dracula. Dracula's own
+    # promotion could never see a regular: it counts messages in memory and the
+    # host hands over every six hours, so the count restarts before anybody
+    # ordinary reaches it. Evidence only — Dracula applies every gate itself.
+    "cogs.attendance_cog",
     "cogs.ircmod_cog",
     "cogs.shared_cog",
     "cogs.social_cog",
@@ -296,6 +302,15 @@ async def help_cmd(ctx):
                 f"`{p}roll` `{p}flip` `{p}choose` `{p}calc` `{p}weather` `{p}ping`\n"
                 f"`{p}nicks` — who is in the IRC room · `{p}say <msg>` — cross-post\n"
                 f"`{p}mod on|off` *(ops)* — the automatic cover Dracula cannot see",
+        inline=False,
+    )
+    em.add_field(
+        name  = "📊 Regulars *(mod)*",
+        value = f"`{p}regulars [n]` — who talks here on the most separate days, "
+                "counted from the relayed history\n"
+                f"`{p}sendregulars` — hand that tally to Dracula now\n"
+                "*Evidence only: Dracula still requires a registered account "
+                "and a clean record before trusting anybody.*",
         inline=False,
     )
     # These were registered and completely undocumented — the only way to find
