@@ -140,6 +140,8 @@ class IRCBridge:
         # is reported once rather than on every relayed line.
         self._missing_targets: Set[str] = set()
         self._warned_no_loop = False
+        # Rooms that refused our JOIN, and how often we have asked to be let in.
+        self._locked_out: Dict[str, int] = {}
 
         # Seed default bridge from config
         _d_def = getattr(config, "BRIDGE_CHANNEL", "").lower()
@@ -785,6 +787,41 @@ class IRCBridge:
                 self._topics[ch] = topic
             return
 
+        # A room that will not let us in.
+        #
+        # The owner asked why Luna1 was not in #batcave. It was configured all
+        # along — EXTRA_BRIDGES maps it and all_channels() joins it — but the room
+        # is invite-only, so the JOIN was REFUSED and nothing here noticed. There
+        # was no handling for 473/474/475 at all, so Luna sat outside a room it was
+        # told to bridge, silently, for as long as the flag was set. Dracula grew
+        # this same recovery after the same thing happened to it.
+        #
+        #   473 invite-only  -> ask ChanServ to invite us
+        #   474 banned       -> ask ChanServ to clear bans matching us
+        #   475 key set      -> nothing we can do; say so
+        #
+        # Three attempts per room per connection. Asking a service in a loop when
+        # it is going to refuse is a flood, not persistence.
+        if num in ("473", "474", "475"):
+            parts = line.split()
+            ch = parts[3] if len(parts) > 3 else ""
+            if ch.startswith("#"):
+                tried = self._locked_out.get(ch.lower(), 0) + 1
+                self._locked_out[ch.lower()] = tried
+                why = {"473": "invite-only", "474": "we are banned",
+                       "475": "a key is set"}[num]
+                if tried > 3:
+                    if tried == 4:
+                        print(f"[irc_bridge] Still shut out of {ch} ({why}) after three "
+                              "attempts — a human needs to let me in.")
+                    return
+                print(f"[irc_bridge] {ch} refused me ({why}) — asking ChanServ "
+                      f"(attempt {tried}).")
+                if num in ("473", "474"):
+                    self._raw(f"PRIVMSG ChanServ :{'INVITE' if num == '473' else 'UNBAN'} {ch}")
+                    threading.Timer(4.0, lambda c=ch: self._raw(f"JOIN {c}")).start()
+            return
+
         # Nick in use (433) — connect with temporary _ suffix, then ghost + reclaim
         if num == "433":
             fallback = f"{config.IRC_NICK}_"
@@ -995,6 +1032,9 @@ class IRCBridge:
 
         # JOIN
         m = re.match(r"^:([^!]+)!\S+\s+JOIN\s+:?(\S+)", line)
+        if m and m.group(1).lower() == (self._nick or "").lower():
+            # In at last: forget the refusals so a later one starts fresh.
+            self._locked_out.pop(m.group(2).lower().lstrip(":"), None)
         if m:
             nick    = m.group(1)
             channel = m.group(2)

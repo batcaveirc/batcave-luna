@@ -71,7 +71,13 @@ jobs:
           IRC_NICK: ${{ secrets.IRC_NICK || 'Luna1' }}
           IRC_REALNAME: ${{ secrets.IRC_REALNAME || 'Keeping the night company' }}
           # The primary room.
-          IRC_CHANNEL: ${{ secrets.IRC_CHANNEL || '#🅱🅰🆃🅲🅰🆅🅴' }}
+          # #batcave is the PRIMARY, because the first mapping registered owns
+          # the Discord -> IRC direction and the owner wants replies landing
+          # where the people are: "that room should be default for my $to room
+          # because its where people are joining more". The emoji room is still
+          # relayed, from EXTRA_BRIDGES below — both post INTO the same Discord
+          # channel, each labelled, and $to still switches per channel by hand.
+          IRC_CHANNEL: ${{ secrets.IRC_CHANNEL || '#batcave' }}
           # Joined but NOT relayed. Empty now that both rooms bridge.
           # Joined but NOT relayed — rooms Luna only listens in, so she can
           # hear our channel being advertised before a raid arrives. She
@@ -80,7 +86,7 @@ jobs:
           WATCH: ${{ secrets.WATCH || 'on' }}
           # Both rooms relay now, each labelled by name so a Discord reader can
           # tell which one they are answering. Format: #irc=discord-channel
-          EXTRA_BRIDGES: ${{ secrets.EXTRA_BRIDGES || '#batcave=🅱🅰🆃🅲🅰🆅🅴' }}
+          EXTRA_BRIDGES: ${{ secrets.EXTRA_BRIDGES || '#🅱🅰🆃🅲🅰🆅🅴=🅱🅰🆃🅲🅰🆅🅴' }}
           ROOM_LABELS: ${{ secrets.ROOM_LABELS || '#batcave=batcave,#🅱🅰🆃🅲🅰🆅🅴=🅱🅰🆃🅲🅰🆅🅴' }}
           # Who the primary moderator is. Luna covers only the gaps while this
           # bot is in the room, and the whole job while it is not.
@@ -116,4 +122,12 @@ jobs:
           STARALIGN_RELAY_URL: ${{ secrets.STARALIGN_RELAY_URL }}
           STARALIGN_RELAY_SECRET: ${{ secrets.STARALIGN_RELAY_SECRET }}
 
-        run: python luna.py
+        # Unbuffered, or there are no logs at all.
+        #
+        # Python buffers stdout when it is not a terminal, so every print() Luna
+        # made sat in a buffer and was DISCARDED when the job was cancelled at the
+        # six-hourly handover. Checked: a full 5h50m run produced the environment
+        # dump and then not one line from the bot. That is why "why is Luna not in
+        # #batcave" could not be answered from its own log, and why the refused
+        # JOIN above went unnoticed for as long as it did.
+        run: python -u luna.py
