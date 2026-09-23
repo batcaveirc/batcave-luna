@@ -519,7 +519,7 @@ class IRCBridge:
         if not config.IRC_NICKSERV_PASS:
             return
         try:
-            self._raw(f"PRIVMSG NickServ :IDENTIFY {config.IRC_NICKSERV_PASS}")
+            self._raw(f"PRIVMSG NickServ :IDENTIFY {config.IRC_NICKSERV_ACCOUNT} {config.IRC_NICKSERV_PASS}")
             self._raw(f"PRIVMSG NickServ :GHOST {config.IRC_NICK} {config.IRC_NICKSERV_PASS}")
             self._raw(f"PRIVMSG NickServ :RELEASE {config.IRC_NICK} {config.IRC_NICKSERV_PASS}")
             self._raw(f"NICK {config.IRC_NICK}")
@@ -745,10 +745,18 @@ class IRCBridge:
             self._refusals = 0          # the address is fine; forget the backoff
             print(f"[irc_bridge] Registered as {current_nick}")
             if config.IRC_NICKSERV_PASS:
-                self._raw(f"PRIVMSG NickServ :IDENTIFY {config.IRC_NICKSERV_PASS}")
+                self._raw(f"PRIVMSG NickServ :IDENTIFY {config.IRC_NICKSERV_ACCOUNT} {config.IRC_NICKSERV_PASS}")
                 time.sleep(1)
-                # Ghost any stale session holding our nick (from a previous crash)
+                # Ghost any stale session holding our nick (from a previous crash
+                # or from the six-hourly handover, where the outgoing runner is
+                # still connected when this one arrives).
                 self._raw(f"PRIVMSG NickServ :GHOST {config.IRC_NICK} {config.IRC_NICKSERV_PASS}")
+                time.sleep(0.5)
+                # RELEASE, before taking it back. GHOST ends the other session but
+                # leaves NickServ holding the nick, and a NICK into that hold is
+                # refused — leaving us on the Luna1_ fallback, unidentified, which
+                # is precisely what enforcement renames to Guest####.
+                self._raw(f"PRIVMSG NickServ :RELEASE {config.IRC_NICK} {config.IRC_NICKSERV_PASS}")
                 time.sleep(0.5)
                 # Reclaim our proper nick if we connected with a fallback (_)
                 self._raw(f"NICK {config.IRC_NICK}")

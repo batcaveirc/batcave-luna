@@ -166,5 +166,35 @@ c("and it says so out loud, once",
   "refusing this ADDRESS" in bridge_src,
   "five hours of silent failure is how this went unnoticed")
 
+
+print("\n— reclaiming our own nick —")
+# The owner: "luna1 is getting disconnected again and again changing to guest id".
+# Guest#### is NickServ enforcement, and two faults in this sequence lead there.
+# At the six-hourly handover the outgoing runner still holds Luna1, so the
+# incoming one takes 433 and falls back to Luna1_.
+c("IDENTIFY names the ACCOUNT, not just the password",
+  "IDENTIFY {config.IRC_NICKSERV_ACCOUNT} {config.IRC_NICKSERV_PASS}" in bridge_src,
+  "the one-argument form identifies the nick you are WEARING — and Luna1_ is not "
+  "a registered account, so it identifies nothing and enforcement takes over")
+c("and nothing still uses the one-argument form",
+  "IDENTIFY {config.IRC_NICKSERV_PASS}" not in bridge_src,
+  "one missed call site is one path back to Guest####")
+c("the account defaults to the nick when unset",
+  'IRC_NICKSERV_ACCOUNT = os.getenv("IRC_NICKSERV_ACCOUNT", "") or IRC_NICK'
+  in pathlib.Path(__file__).with_name("config.py").read_text(),
+  "no new secret required for the normal case")
+
+# GHOST ends the stale session; it does not clear the hold NickServ then places on
+# the nick, and a NICK into that hold is refused — leaving us on Luna1_,
+# unidentified, which is what gets renamed.
+_seq = [bridge_src.index(x) for x in ("NickServ :IDENTIFY", "NickServ :GHOST",
+                                      "NickServ :RELEASE", 'NICK {config.IRC_NICK}')]
+c("the reclaim runs IDENTIFY -> GHOST -> RELEASE -> NICK",
+  _seq == sorted(_seq), f"order found at {_seq}")
+c("both reclaim paths RELEASE before taking the nick",
+  bridge_src.count("NickServ :RELEASE") >= 2,
+  f"{bridge_src.count('NickServ :RELEASE')} RELEASE call(s) — the registration path "
+  "had GHOST then NICK with no RELEASE between them")
+
 print(f"\n{fails} FAILED" if fails else "\nALL PASS")
 sys.exit(1 if fails else 0)

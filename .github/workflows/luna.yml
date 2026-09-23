@@ -37,6 +37,12 @@ jobs:
           DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
           OWNER_IDS: ${{ secrets.OWNER_IDS }}
           IRC_NICKSERV_PASS: ${{ secrets.IRC_NICKSERV_PASS }}
+          # The ACCOUNT to identify as, which is not always the nick being
+          # worn. IDENTIFY takes "<password>" or "<account> <password>"; the
+          # one-argument form identifies whatever nick you currently hold, so the
+          # moment a 433 bumps Luna to Luna1_ it identifies nothing at all and
+          # enforcement renames the bot to Guest####. Defaults to IRC_NICK.
+          IRC_NICKSERV_ACCOUNT: ${{ secrets.IRC_NICKSERV_ACCOUNT }}
           # Shared with Dracula, and with nothing else. Luna counts how many
           # separate days each IRC nick was heard on out of the relayed history
           # and signs the tally with this; Dracula refuses any report that

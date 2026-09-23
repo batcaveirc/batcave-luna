@@ -43,6 +43,7 @@ IRC_PORT          = int(os.getenv("IRC_PORT", "6697"))
 IRC_SSL           = True
 IRC_NICK          = os.getenv("IRC_NICK",          "Luna")
 IRC_NICKSERV_PASS = os.getenv("IRC_NICKSERV_PASS", "")
+IRC_NICKSERV_ACCOUNT = os.getenv("IRC_NICKSERV_ACCOUNT", "") or IRC_NICK
 IRC_CHANNEL       = os.getenv("IRC_CHANNEL",       "#BatCave")
 IRC_REALNAME      = os.getenv("IRC_REALNAME", "Keeping the night company")
 
