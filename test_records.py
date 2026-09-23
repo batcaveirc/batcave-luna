@@ -196,5 +196,36 @@ c("both reclaim paths RELEASE before taking the nick",
   f"{bridge_src.count('NickServ :RELEASE')} RELEASE call(s) — the registration path "
   "had GHOST then NICK with no RELEASE between them")
 
+
+print("\n— nick changes cannot run away —")
+# The owner's actual reason for wanting the Guest#### loop fixed: "i dont wanna be
+# banned cause of fast nick changes". This network kills for nick flooding.
+c("the reclaim only runs when we are NOT already on our nick",
+  'if current_nick.lower() != config.IRC_NICK.lower():' in bridge_src,
+  "it used to GHOST, RELEASE and NICK on every connect, including the ordinary "
+  "case where registration had just handed us the name")
+c("a 433 tries a DIFFERENT fallback each time",
+  'suffix = "_" * self._nick_tries' in bridge_src,
+  "answering every 433 with the same name is an unbounded loop when that one is "
+  "taken too, which is what a stuck previous runner leaves behind")
+c("and gives up rather than cycling forever",
+  "self._nick_tries > 4" in bridge_src)
+c("there is a hard ceiling on nick changes",
+  "_NICK_MAX" in bridge_src and "_nick_allowed" in bridge_src,
+  "guarding call sites is not enough; the next one written will not know")
+c("the ceiling is well under a flood",
+  ns2 is not None and True and "_NICK_WINDOW = 300" in bridge_src
+  and "_NICK_MAX = 6" in bridge_src)
+# ...but registration must NEVER be blocked, or a nick problem becomes a total
+# outage: the server has not acknowledged us at that point.
+_reg = bridge_src.index('self._raw(f"USER {config.IRC_NICK}')
+_before = bridge_src[max(0, _reg - 300):_reg]
+c("registration itself is exempt from the ceiling",
+  '_nick_allowed(): self._raw(f"NICK {config.IRC_NICK}")' not in _before,
+  "blocking the opening NICK would leave the bot unable to connect at all")
+c("and so is the 433 fallback, for the same reason",
+  'if self._nick_allowed(): self._raw(f"NICK {fallback}")' not in bridge_src,
+  "it is bounded by _nick_tries instead, which cannot loop")
+
 print(f"\n{fails} FAILED" if fails else "\nALL PASS")
 sys.exit(1 if fails else 0)

@@ -463,7 +463,7 @@ class IRCBridge:
     def change_nick(self, new_nick: str) -> bool:
         if not self._connected:
             return False
-        self._raw(f"NICK {new_nick}")
+        if self._nick_allowed(): self._raw(f"NICK {new_nick}")
         return True
 
     def get_topic(self, channel: str | None = None) -> str | None:
@@ -522,7 +522,7 @@ class IRCBridge:
             self._raw(f"PRIVMSG NickServ :IDENTIFY {config.IRC_NICKSERV_ACCOUNT} {config.IRC_NICKSERV_PASS}")
             self._raw(f"PRIVMSG NickServ :GHOST {config.IRC_NICK} {config.IRC_NICKSERV_PASS}")
             self._raw(f"PRIVMSG NickServ :RELEASE {config.IRC_NICK} {config.IRC_NICKSERV_PASS}")
-            self._raw(f"NICK {config.IRC_NICK}")
+            if self._nick_allowed(): self._raw(f"NICK {config.IRC_NICK}")
             for ch in self.all_channels():
                 self._raw(f"JOIN {ch}")
         except Exception as e:  # noqa: BLE001 — recovery must never kill the loop
@@ -653,12 +653,16 @@ class IRCBridge:
         self._sock.connect((config.IRC_SERVER, config.IRC_PORT))
         self._last_ping = time.time()
         self._nick = config.IRC_NICK
+        self._nick_tries = 0          # distinct fallbacks used on THIS attempt
         self._connect_time = time.time()
         # server-time marks replayed +H history with when it was ORIGINALLY
         # said. Without it Luna re-relays the whole backlog to Discord on every
         # six-hour restart, which is a wall of duplicated conversation.
         self._raw("CAP REQ :server-time")
         self._raw("CAP END")
+        # NOT rate-limited: this is registration, not a nick change — the server
+        # has not acknowledged us yet, and refusing it would leave the bot unable
+        # to connect at all rather than merely wearing the wrong name.
         self._raw(f"NICK {config.IRC_NICK}")
         self._raw(f"USER {config.IRC_NICK} 0 * :{config.IRC_REALNAME}")
 
@@ -747,20 +751,29 @@ class IRCBridge:
             if config.IRC_NICKSERV_PASS:
                 self._raw(f"PRIVMSG NickServ :IDENTIFY {config.IRC_NICKSERV_ACCOUNT} {config.IRC_NICKSERV_PASS}")
                 time.sleep(1)
-                # Ghost any stale session holding our nick (from a previous crash
-                # or from the six-hourly handover, where the outgoing runner is
-                # still connected when this one arrives).
-                self._raw(f"PRIVMSG NickServ :GHOST {config.IRC_NICK} {config.IRC_NICKSERV_PASS}")
-                time.sleep(0.5)
-                # RELEASE, before taking it back. GHOST ends the other session but
-                # leaves NickServ holding the nick, and a NICK into that hold is
-                # refused — leaving us on the Luna1_ fallback, unidentified, which
-                # is precisely what enforcement renames to Guest####.
-                self._raw(f"PRIVMSG NickServ :RELEASE {config.IRC_NICK} {config.IRC_NICKSERV_PASS}")
-                time.sleep(0.5)
-                # Reclaim our proper nick if we connected with a fallback (_)
-                self._raw(f"NICK {config.IRC_NICK}")
-                time.sleep(0.3)
+                # Only fight for the nick if we do not already have it.
+                #
+                # This used to GHOST, RELEASE and NICK on every single connect,
+                # including the ordinary case where registration had just handed
+                # us Luna1 — three nick-related commands each time, and a
+                # reconnect loop turns that into the nick flooding this network
+                # kills for. If we are already Luna1, there is nothing to reclaim.
+                if current_nick.lower() != config.IRC_NICK.lower():
+                    print(f"[irc_bridge] On fallback {current_nick} — reclaiming "
+                          f"{config.IRC_NICK}.")
+                    # Ghost the stale session still holding it (a previous crash,
+                    # or the six-hourly handover where the outgoing runner is
+                    # still connected when this one arrives).
+                    self._raw(f"PRIVMSG NickServ :GHOST {config.IRC_NICK} {config.IRC_NICKSERV_PASS}")
+                    time.sleep(0.5)
+                    # RELEASE before taking it back: GHOST ends the other session
+                    # but leaves NickServ HOLDING the nick, and a NICK into that
+                    # hold is refused — leaving us on the fallback, unidentified,
+                    # which is exactly what enforcement renames to Guest####.
+                    self._raw(f"PRIVMSG NickServ :RELEASE {config.IRC_NICK} {config.IRC_NICKSERV_PASS}")
+                    time.sleep(0.5)
+                    if self._nick_allowed(): self._raw(f"NICK {config.IRC_NICK}")
+                    time.sleep(0.3)
             # +g (callerid) refuses private messages from anyone not on our
             # accept list, and +R from anyone unregistered. Both are enforced by
             # the SERVER, so a DM flood never reaches our socket and cannot get
@@ -830,10 +843,18 @@ class IRCBridge:
                     threading.Timer(4.0, lambda c=ch: self._raw(f"JOIN {c}")).start()
             return
 
-        # Nick in use (433) — connect with temporary _ suffix, then ghost + reclaim
+        # Nick in use (433) — take a DISTINCT fallback, then ghost + reclaim.
         if num == "433":
-            fallback = f"{config.IRC_NICK}_"
-            print(f"[irc_bridge] Nick in use — using {fallback}, will GHOST after auth")
+            self._nick_tries = getattr(self, "_nick_tries", 0) + 1
+            if self._nick_tries > 4:
+                print("[irc_bridge] Nick and every fallback are taken — giving up on this "
+                      "attempt rather than cycling nicks, which is what gets a bot killed. "
+                      "The reconnect backoff will try again.")
+                return
+            suffix = "_" * self._nick_tries
+            fallback = f"{config.IRC_NICK}{suffix}"
+            print(f"[irc_bridge] Nick in use — trying {fallback} "
+                  f"(attempt {self._nick_tries}), will GHOST and reclaim after auth")
             self._nick = fallback
             self._raw(f"NICK {fallback}")
             return
@@ -1168,6 +1189,32 @@ class IRCBridge:
             if ch:
                 return ch
         return None
+
+    # Nick changes, rate-limited at the last possible moment.
+    #
+    # The owner's reason for wanting the Guest#### loop fixed at all: "i dont wanna
+    # be banned cause of fast nick changes". This network kills for nick flooding,
+    # and a reconnect loop that reclaims its name on every attempt is precisely
+    # that shape. Guarding the individual call sites is not enough — the next one
+    # written will not know — so the ceiling sits on the wire itself.
+    #
+    # Six in five minutes is generous for a bot that should change nick twice per
+    # connect at most, and far under anything the server objects to.
+    _NICK_MAX = 6
+    _NICK_WINDOW = 300
+
+    def _nick_allowed(self) -> bool:
+        now = time.time()
+        self._nick_times = [t for t in getattr(self, "_nick_times", []) if now - t < self._NICK_WINDOW]
+        if len(self._nick_times) >= self._NICK_MAX:
+            if now - getattr(self, "_nick_gripe", 0) > 300:
+                self._nick_gripe = now
+                print(f"[irc_bridge] Refusing to change nick again — {len(self._nick_times)} "
+                      f"in {self._NICK_WINDOW}s. This network kills for nick flooding, and "
+                      "whatever is asking needs fixing, not retrying.")
+            return False
+        self._nick_times.append(now)
+        return True
 
     def _raw(self, msg: str):
         if self._sock:
