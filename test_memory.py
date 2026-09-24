@@ -86,5 +86,29 @@ c("the cog is in the COGS list", '"cogs.memory_cog"' in luna,
 for cmd in ("find", "tell", "stats"):
     c(f"${cmd} is in the help", f"{{p}}{cmd}" in luna)
 
+
+print("\n— moods —")
+# The owner: "make her act in different mood all the time". A bot reads as a bot
+# because it is identical at 4am and 9pm, to everyone, forever.
+from utils import moods as _m                                   # noqa: E402
+from datetime import datetime as _dt, timezone as _tz, timedelta as _td  # noqa: E402
+_base = _dt(2026, 9, 24, tzinfo=_tz.utc)
+c("a mood holds steady for hours, not messages",
+  _m.name(_base + _td(hours=1)) == _m.name(_base + _td(hours=3)),
+  "lurching mid-conversation is worse than being flat")
+_day = [_m.name(_base + _td(hours=h)) for h in range(0, 24, 4)]
+c("and the day runs through several different ones",
+  len(set(_day)) >= 5, f"{_day} — an independent draw per block once produced five "
+  "identical moods in a row, which reads as 'she has been sleepy since yesterday'")
+c("a different order tomorrow",
+  [_m.name(_base + _td(days=1, hours=h)) for h in range(0, 24, 4)] != _day)
+c("it needs no stored state, which a six-hourly restart would lose",
+  "open(" not in (pathlib.Path(__file__).parent / "utils" / "moods.py").read_text())
+c("the persona itself never rotates — only the weather",
+  "SYSTEM_PROMPT + " in (pathlib.Path(__file__).parent / "cogs" / "ai_cog.py").read_text(),
+  "she/her, old, unbothered, Hinglish — those are Luna, not a mood")
+c("and $mood says which one, and what is next",
+  "def mood" in src and "Later:" in src)
+
 print(f"\n{fails} FAILED" if fails else "\nALL PASS")
 sys.exit(1 if fails else 0)

@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 
 import aiohttp
+from utils import moods
 import discord
 from discord.ext import commands
 
@@ -77,7 +78,7 @@ async def ask(prompt: str, max_tokens: int = 160) -> str:
                 "temperature": 0.8,
                 "max_tokens": ceiling,
                 "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": SYSTEM_PROMPT + "\n" + moods.line()},
                     {"role": "user", "content": prompt[:1500]},
                 ],
             }

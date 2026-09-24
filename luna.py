@@ -318,7 +318,8 @@ async def help_cmd(ctx):
         value = f"`{p}find <text>` — search what the room actually said (IRC has no\n"
                 "scrollback; I do)\n"
                 f"`{p}tell <nick> <msg>` — leave it, I hand it over when they next speak\n"
-                f"`{p}stats` — who talks here, and when the room is awake",
+                f"`{p}stats` — who talks here, and when the room is awake\n"
+                f"`{p}mood` — what sort of evening I am having",
         inline=False,
     )
     em.add_field(

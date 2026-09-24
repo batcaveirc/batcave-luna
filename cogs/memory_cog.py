@@ -245,5 +245,17 @@ class MemoryCog(commands.Cog, name="Memory"):
         )
 
 
+    # ── $mood ────────────────────────────────────────────────────────────────
+
+    @commands.command(name="mood")
+    async def mood(self, ctx: commands.Context) -> None:
+        """What sort of evening Luna is having."""
+        from utils import moods
+        name, line = moods.current()
+        nxt = moods.name(datetime.now(timezone.utc) + timedelta(hours=4))
+        await ctx.send(f"Tonight I am **{name}** — *{line.split(':', 1)[-1].strip()}*\n"
+                       f"Later: **{nxt}**.")
+
+
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(MemoryCog(bot))
