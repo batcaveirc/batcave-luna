@@ -57,6 +57,22 @@ BATBOT_REPLIT_URL     = os.getenv("BATBOT_REPLIT_URL", "")
 BATBOT_REPLIT_PROJECT = os.getenv("BATBOT_REPLIT_PROJECT", "")
 # BatBot's IRC nick to watch for in #BatCave
 BATBOT_IRC_NICK       = os.getenv("BATBOT_IRC_NICK", "Vampire")
+
+# ── Nick rotation ────────────────────────────────────────────────────────────
+# Off unless switched on, and it does nothing without a pool: the names the bots
+# wear are the owner's to choose. The cap, not the interval, is the safety
+# feature — at most this many changes in any rolling hour whatever the timer
+# asks for, because this network kills for nick flooding.
+IRC_NICK_ROTATE       = os.getenv("IRC_NICK_ROTATE", "").strip().lower() in ("1", "true", "yes", "on")
+IRC_NICK_POOL         = [n.strip() for n in os.getenv("IRC_NICK_POOL", "").split(",") if n.strip()]
+IRC_NICK_ROTATE_MIN   = max(15, int(os.getenv("IRC_NICK_ROTATE_MIN", "90") or 90))
+IRC_NICK_MAX_PER_HOUR = max(1, int(os.getenv("IRC_NICK_MAX_PER_HOUR", "2") or 2))
+
+# The vhosts our own bots wear. A vhost belongs to the CONNECTION, not the nick,
+# so this is the one way of saying "one of ours" that a rename cannot break —
+# BATBOT_IRC_NICK above is a NICK, and a nick is exactly what rotation changes.
+IRC_OUR_HOSTS         = [h.strip().lower() for h in os.getenv(
+    "IRC_OUR_HOSTS", "Sat.Chit.Ananda,Keeping.The.Night.Company").split(",") if h.strip()]
 # Discord channel name for bot-status alerts
 ALERT_CHANNEL         = os.getenv("ALERT_CHANNEL", "bot-logs")
 # Discord role name required to use mod commands (also accepts users with kick/ban perm)

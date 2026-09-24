@@ -76,6 +76,19 @@ jobs:
           IRC_PORT: ${{ secrets.IRC_PORT || '6697' }}
           IRC_NICK: ${{ secrets.IRC_NICK || 'Luna1' }}
           IRC_REALNAME: ${{ secrets.IRC_REALNAME || 'Keeping the night company' }}
+          # ── Nick rotation ──────────────────────────────────────────────
+          # Off unless switched on, and it does nothing without a pool — the
+          # names the bots wear are the owner's to pick, so no default list.
+          # The CAP is the safety feature, not the interval: at most this many
+          # changes in any rolling hour whatever the timer asks for, and the
+          # existing _nick_allowed() flood ceiling still applies underneath.
+          IRC_NICK_ROTATE: ${{ secrets.IRC_NICK_ROTATE || '' }}
+          IRC_NICK_POOL: ${{ secrets.IRC_NICK_POOL || '' }}
+          IRC_NICK_ROTATE_MIN: ${{ secrets.IRC_NICK_ROTATE_MIN || '90' }}
+          IRC_NICK_MAX_PER_HOUR: ${{ secrets.IRC_NICK_MAX_PER_HOUR || '2' }}
+          # Vhosts our own bots wear. A vhost belongs to the connection, so this
+          # survives a rename where BATBOT_IRC_NICK cannot.
+          IRC_OUR_HOSTS: ${{ secrets.IRC_OUR_HOSTS || 'Sat.Chit.Ananda,Keeping.The.Night.Company' }}
           # The primary room.
           # #batcave is the PRIMARY, because the first mapping registered owns
           # the Discord -> IRC direction and the owner wants replies landing

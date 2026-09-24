@@ -9,6 +9,7 @@ Discord commands (~prefix) are suppressed from IRC relay.
 
 import asyncio
 import os
+import random
 import re
 import socket
 import ssl
@@ -182,6 +183,14 @@ class IRCBridge:
         # that assumes otherwise stops recognising its own messages.
         self._nick = config.IRC_NICK
         self._last_reclaim = 0.0
+        # The name we MEAN to wear, which is not always the name we have. The
+        # reclaim check below compared against config.IRC_NICK, so ANY other
+        # name read as "we lost our nick" — it would have undone every rotation
+        # within a minute, GHOSTing and reclaiming each time.
+        self._wanted_nick = config.IRC_NICK
+        self._pending_rotation = ""
+        self._rotations_at = []
+        self._last_rotate = 0.0
         self._ai_cooldown: Dict[str, float] = {}   # nick(lower) -> ts
         self._ai_last_channel = 0.0
         self._connect_time = time.time()
@@ -692,11 +701,18 @@ class IRCBridge:
             self._last_ping = time.time()
             # Enforcement can strike at any time, not only at registration.
             if (self._connected
-                    and self._nick.lower() != config.IRC_NICK.lower()
+                    and self._nick.lower() != self._wanted_nick.lower()
                     and time.time() - self._last_reclaim > _NICK_RECLAIM_SECS):
                 self._last_reclaim = time.time()
-                print(f"[irc_bridge] Still on {self._nick} — retrying reclaim.")
-                self._reclaim_nick()
+                print(f"[irc_bridge] Still on {self._nick}, wanted {self._wanted_nick} — retrying reclaim.")
+                self._revert_nick("wearing a name we did not choose")
+            # Rotation rides the same loop rather than a separate timer: this
+            # runs only while the link is alive, so a dead connection cannot
+            # keep renaming into the void.
+            if (self._connected and config.IRC_NICK_ROTATE
+                    and time.time() - self._last_rotate > config.IRC_NICK_ROTATE_MIN * 60):
+                self._last_rotate = time.time()
+                self._rotate_nick()
             buf += data
             while "\r\n" in buf:
                 line, buf = buf.split("\r\n", 1)
@@ -845,6 +861,13 @@ class IRCBridge:
 
         # Nick in use (433) — take a DISTINCT fallback, then ghost + reclaim.
         if num == "433":
+            # A rotation target that is taken is a non-event: we still hold the
+            # name we have. Taking a "_" fallback here would rename us for no
+            # reason and spend one of the hour's changes doing it.
+            if self._pending_rotation:
+                print(f"[irc_bridge] {self._pending_rotation} is taken — staying as {self._nick}.")
+                self._pending_rotation = ""
+                return
             self._nick_tries = getattr(self, "_nick_tries", 0) + 1
             if self._nick_tries > 4:
                 print("[irc_bridge] Nick and every fallback are taken — giving up on this "
@@ -932,9 +955,16 @@ class IRCBridge:
 
             if old_nick.lower() == self._nick.lower():
                 self._nick = new_nick
-                if new_nick.lower() != config.IRC_NICK.lower():
+                if (self._pending_rotation
+                        and new_nick.lower() == self._pending_rotation.lower()):
+                    # It took. This is the name we mean to wear now, so the
+                    # reclaim check must not read it as a nick we lost.
+                    self._wanted_nick = new_nick
+                    self._pending_rotation = ""
+                    print(f"[irc_bridge] Now wearing {new_nick}.")
+                elif new_nick.lower() != self._wanted_nick.lower():
                     print(f"[irc_bridge] Force-renamed to {new_nick} — reclaiming.")
-                    self._reclaim_nick()
+                    self._revert_nick("NickServ enforced a rename")
             return
 
         # PRIVMSG — channel or PM
@@ -949,7 +979,11 @@ class IRCBridge:
             message = m.group(3).strip()
 
             # Ignore own messages
-            if nick.lower() in (config.IRC_NICK.lower(), f"{config.IRC_NICK}_".lower()):
+            # Against the name we are WEARING, not the configured one. After a
+            # rotation those differ, and Luna would have started relaying and
+            # answering her own output.
+            if nick.lower() in (self._nick.lower(), config.IRC_NICK.lower(),
+                                f"{config.IRC_NICK}_".lower()):
                 return
             # Replayed channel history is not new conversation: relaying it
             # would repost the backlog to Discord on every restart, and
@@ -1111,7 +1145,11 @@ class IRCBridge:
         if self.loop is None or not self.loop.is_running():
             return
         batbot_nick = (getattr(config, "BATBOT_IRC_NICK", "") or "").strip().lower()
-        is_bot = bool(batbot_nick) and nick.strip().lower() == batbot_nick
+        # By host as well as by name. Matching on the nick alone meant a bot that
+        # renamed — which is now something they do on purpose — would show up on
+        # StarAlign as a stranger.
+        is_bot = (bool(batbot_nick) and nick.strip().lower() == batbot_nick) \
+            or self.is_one_of_ours(nick)
         asyncio.run_coroutine_threadsafe(
             relay_to_staralign(
                 username="bot" if is_bot else nick,
@@ -1200,6 +1238,61 @@ class IRCBridge:
     #
     # Six in five minutes is generous for a bot that should change nick twice per
     # connect at most, and far under anything the server objects to.
+    def is_one_of_ours(self, nick: str) -> bool:
+        """One of our own bots, known by the host rather than the name.
+
+        BATBOT_IRC_NICK is a NICK, and a nick is exactly what rotation changes.
+        A vhost belongs to the connection, so Dracula@Sat.Chit.Ananda stays
+        recognisable whatever it is currently called.
+        """
+        host = (self._hosts.get(str(nick).lower()) or "").split("@")[-1].lower()
+        if not host:
+            return False
+        return any(host == h or host.endswith("." + h) for h in config.IRC_OUR_HOSTS)
+
+    def _rotation_allowed(self) -> bool:
+        now = time.time()
+        self._rotations_at = [t for t in self._rotations_at if now - t < 3600]
+        return len(self._rotations_at) < config.IRC_NICK_MAX_PER_HOUR
+
+    def _revert_nick(self, why: str) -> None:
+        """Back to the name the room knows, and stop rotating for now."""
+        self._pending_rotation = ""
+        if self._wanted_nick.lower() != config.IRC_NICK.lower():
+            print(f"[irc_bridge] Reverting to {config.IRC_NICK} — {why}")
+            self._wanted_nick = config.IRC_NICK
+        # Unconditional, so a bot that never rotates behaves exactly as before.
+        if self._nick.lower() != config.IRC_NICK.lower():
+            self._reclaim_nick()
+
+    def _rotate_nick(self) -> bool:
+        if not config.IRC_NICK_ROTATE or not config.IRC_NICK_POOL:
+            return False
+        if not self._connected or self._pending_rotation:
+            return False
+        if not self._rotation_allowed():
+            return False
+        options = [n for n in config.IRC_NICK_POOL if n.lower() != self._nick.lower()]
+        if not options:
+            return False
+        nxt = random.choice(options)
+        # Still subject to the flood ceiling below: two limits that can only
+        # ever make each other stricter is the right shape for something that
+        # gets you killed for being wrong.
+        if not self._nick_allowed():
+            return False
+        self._pending_rotation = nxt
+        self._rotations_at.append(time.time())
+        print(f"[irc_bridge] Rotating {self._nick} -> {nxt}")
+        self._raw(f"NICK {nxt}")
+        threading.Timer(30.0, self._clear_pending_rotation, args=(nxt,)).start()
+        return True
+
+    def _clear_pending_rotation(self, asked_for: str) -> None:
+        """A request the server never answered must not block every later one."""
+        if self._pending_rotation == asked_for:
+            self._pending_rotation = ""
+
     _NICK_MAX = 6
     _NICK_WINDOW = 300
 
