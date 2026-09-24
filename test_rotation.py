@@ -38,6 +38,8 @@ def bridge(pool=("Selene", "Carmilla", "Lilith"), rotate=True, cap=2):
     b._nick = config.IRC_NICK
     b._wanted_nick = config.IRC_NICK
     b._pending_rotation = ""
+    b._rotation_numbered = False
+    b._isupport = {}
     b._rotations_at = []
     b._last_rotate = 0.0
     b._nick_times = []
@@ -79,12 +81,44 @@ c("a second is refused while one is still in flight", b._rotate_nick() is False)
 b._clear_pending_rotation(b._pending_rotation)
 c("and allowed again once the request expires", b._pending_rotation == "")
 
-print("\n— off unless asked for —")
+print("\n— off only when actually switched off —")
 b = bridge(rotate=False)
 c("nothing happens when rotation is off", b._rotate_nick() is False and not b.sent)
+
+# CHANGED ON PURPOSE. This used to assert that an empty pool meant "nothing to
+# do" — the right call while a pool was the only source of names. The owner
+# rejected that whole approach: "i dont want to do this manually i want it to be
+# done by the bot itself ... can add a number on back of it to avoid any
+# conflicts." An empty pool is now the NORMAL case and means "build one from my
+# own name", so the old assertion encoded a rule that no longer exists.
+print("\n— with nothing configured at all —")
 b = bridge(pool=())
-c("nothing happens with an empty pool", b._rotate_nick() is False and not b.sent,
-  "an empty list must mean 'nothing to do', never 'anything goes'")
+ok = b._rotate_nick()
+asked = b.sent[0].split()[-1] if b.sent else ""
+c("an empty pool still rotates, using her own name", ok and asked,
+  "this is the whole point: no pool, no NickServ GROUP, no manual step")
+c("the name is her own with a number on the end",
+  asked.startswith(config.IRC_NICK) and asked[len(config.IRC_NICK):].isdigit(),
+  f"asked for {asked!r}")
+c("and is not the bare name she is already wearing", asked != config.IRC_NICK)
+
+print("\n— a taken name gets numbered, not abandoned —")
+b = bridge(pool=("Selene",))
+b._rotate_nick()
+first = b.sent[0].split()[-1]
+c("a pool name is tried plain first", first == "Selene", f"asked {first!r}")
+retry = b._next_rotation_name(True, first)
+c("and the retry is that SAME name with digits after it",
+  retry.startswith("Selene") and retry[len("Selene"):].isdigit(),
+  f"retry was {retry!r} — numbering a DIFFERENT pool name answers a question nobody asked")
+
+print("\n— a long base cannot overflow the network's nick limit —")
+b = bridge(pool=("A" * 40,))
+made = b._next_rotation_name(True, "A" * 40)
+c("a generated name fits inside IRC_NICK_MAXLEN",
+  0 < len(made) <= config.IRC_NICK_MAXLEN,
+  f"{len(made)} chars, limit {config.IRC_NICK_MAXLEN} — an over-long NICK is "
+  "REJECTED, which reads exactly like the name being taken")
 
 print("\n— putting it back —")
 b = bridge()
@@ -104,6 +138,28 @@ b._nick = "Guest12345"
 b.sent.clear()
 b._revert_nick("enforced")
 c("a bot that never rotates still recovers a lost nick", "RECLAIM" in b.sent)
+
+print("\n— asking the server instead of guessing —")
+b = bridge()
+b._isupport = {}
+# A real ISUPPORT line from an InspIRCd network, trailing human text and all.
+line = (":irc.hybridirc.com 005 Luna AWAYLEN=200 CASEMAPPING=ascii CHANNELLEN=64 "
+        "KICKLEN=255 NICKLEN=18 TOPICLEN=330 MODES=20 MONITOR=30 "
+        ":are supported by this server")
+b._handle_line(line)
+c("it reads the limits out of 005", b._isupport.get("NICKLEN") == "18",
+  f"parsed: {b._isupport}")
+c("and the flag-only tokens too", "MONITOR" in b._isupport, f"parsed: {b._isupport}")
+c("the trailing ':are supported by this server' is not mistaken for a token",
+  not any(k.startswith(":") or k in ("ARE", "SUPPORTED", "BY", "THIS", "SERVER")
+          for k in b._isupport), f"parsed: {sorted(b._isupport)}")
+c("the nick limit now comes from the server, not the config",
+  b.nick_limit() == 18, f"got {b.nick_limit()}")
+
+# The limit has to actually constrain the name, or reading it changes nothing.
+made = b._next_rotation_name(True, "A" * 40)
+c("and a generated name respects it", 0 < len(made) <= 18,
+  f"{made!r} is {len(made)} chars against a server limit of 18")
 
 print("\n— knowing our own, whatever they are called —")
 b = bridge()

@@ -77,8 +77,11 @@ jobs:
           IRC_NICK: ${{ secrets.IRC_NICK || 'Luna1' }}
           IRC_REALNAME: ${{ secrets.IRC_REALNAME || 'Keeping the night company' }}
           # ── Nick rotation ──────────────────────────────────────────────
-          # Off unless switched on, and it does nothing without a pool — the
-          # names the bots wear are the owner's to pick, so no default list.
+          # ON by default and needs nothing set. With no IRC_NICK_POOL she builds
+          # her own names — Luna47 — so there is nothing to choose and nothing to
+          # register with NickServ. The number is what makes that safe: a numbered
+          # variant is almost certainly not REGISTERED to anybody, so there is no
+          # enforcement to trip. IRC_NICK_ROTATE=0 turns it off.
           # The CAP is the safety feature, not the interval: at most this many
           # changes in any rolling hour whatever the timer asks for, and the
           # existing _nick_allowed() flood ceiling still applies underneath.
@@ -86,6 +89,7 @@ jobs:
           IRC_NICK_POOL: ${{ secrets.IRC_NICK_POOL || '' }}
           IRC_NICK_ROTATE_MIN: ${{ secrets.IRC_NICK_ROTATE_MIN || '90' }}
           IRC_NICK_MAX_PER_HOUR: ${{ secrets.IRC_NICK_MAX_PER_HOUR || '2' }}
+          IRC_NICK_MAXLEN: ${{ secrets.IRC_NICK_MAXLEN || '30' }}
           # Vhosts our own bots wear. A vhost belongs to the connection, so this
           # survives a rename where BATBOT_IRC_NICK cannot.
           IRC_OUR_HOSTS: ${{ secrets.IRC_OUR_HOSTS || 'Sat.Chit.Ananda,Keeping.The.Night.Company' }}

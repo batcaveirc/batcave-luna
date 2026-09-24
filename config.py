@@ -63,8 +63,17 @@ BATBOT_IRC_NICK       = os.getenv("BATBOT_IRC_NICK", "Vampire")
 # wear are the owner's to choose. The cap, not the interval, is the safety
 # feature — at most this many changes in any rolling hour whatever the timer
 # asks for, because this network kills for nick flooding.
-IRC_NICK_ROTATE       = os.getenv("IRC_NICK_ROTATE", "").strip().lower() in ("1", "true", "yes", "on")
+# ON by default and needs no configuration: with no pool she builds names from
+# the one she already has — Luna47 — so there is nothing to pick and nothing to
+# register. A number on the end is what avoids both a collision with a live user
+# and, more importantly, a clash with a nick somebody else REGISTERED, which is
+# what would have NickServ force-rename her to a Guest. IRC_NICK_ROTATE=0 stops it.
+IRC_NICK_ROTATE       = os.getenv("IRC_NICK_ROTATE", "on").strip().lower() not in ("0", "false", "no", "off")
+# Optional: names to use INSTEAD of numbered variants of her own.
 IRC_NICK_POOL         = [n.strip() for n in os.getenv("IRC_NICK_POOL", "").split(",") if n.strip()]
+# Longest nick the network accepts; over it the NICK is rejected, which looks
+# exactly like the name being taken.
+IRC_NICK_MAXLEN       = max(9, int(os.getenv("IRC_NICK_MAXLEN", "30") or 30))
 IRC_NICK_ROTATE_MIN   = max(15, int(os.getenv("IRC_NICK_ROTATE_MIN", "90") or 90))
 IRC_NICK_MAX_PER_HOUR = max(1, int(os.getenv("IRC_NICK_MAX_PER_HOUR", "2") or 2))
 

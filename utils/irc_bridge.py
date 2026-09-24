@@ -189,8 +189,10 @@ class IRCBridge:
         # within a minute, GHOSTing and reclaiming each time.
         self._wanted_nick = config.IRC_NICK
         self._pending_rotation = ""
+        self._rotation_numbered = False
         self._rotations_at = []
         self._last_rotate = 0.0
+        self._isupport: Dict[str, str] = {}   # what the server says it supports
         self._ai_cooldown: Dict[str, float] = {}   # nick(lower) -> ts
         self._ai_last_channel = 0.0
         self._connect_time = time.time()
@@ -758,6 +760,19 @@ class IRCBridge:
 
         num = numeric(line)
 
+        # 005 ISUPPORT — the server states its own limits on connect, and we
+        # were guessing at every one of them: a hardcoded 30 for the nick
+        # length, a hardcoded 400 for how much text fits in a line. Guessing
+        # low wastes room; guessing high gets the line SILENTLY truncated,
+        # which is how $help lost its tail for weeks. Ask, do not assume.
+        if num == "005":
+            for tok in line.split()[3:]:
+                if tok.startswith(":"):
+                    break                      # the human-readable tail
+                key, _, val = tok.partition("=")
+                self._isupport[key.upper()] = val
+            return
+
         # 001 = registered
         if num == "001":
             current_nick = config.IRC_NICK
@@ -865,8 +880,21 @@ class IRCBridge:
             # name we have. Taking a "_" fallback here would rename us for no
             # reason and spend one of the hour's changes doing it.
             if self._pending_rotation:
-                print(f"[irc_bridge] {self._pending_rotation} is taken — staying as {self._nick}.")
-                self._pending_rotation = ""
+                # Taken. Put a number on the end and ask once more — that is the
+                # point of the numbering. Exactly ONE retry: a loop here is a
+                # nick flood, the one thing this must never become. It is not
+                # counted against the hourly cap either, being the same rotation.
+                retry = ("" if self._rotation_numbered
+                         else self._next_rotation_name(
+                             True, self._pending_rotation.rstrip("0123456789")))
+                if retry:
+                    print(f"[irc_bridge] {self._pending_rotation} is taken — trying {retry}.")
+                    self._rotation_numbered = True
+                    self._pending_rotation = retry
+                    self._raw(f"NICK {retry}")
+                else:
+                    print(f"[irc_bridge] {self._pending_rotation} is taken — staying as {self._nick}.")
+                    self._pending_rotation = ""
                 return
             self._nick_tries = getattr(self, "_nick_tries", 0) + 1
             if self._nick_tries > 4:
@@ -1250,6 +1278,19 @@ class IRCBridge:
             return False
         return any(host == h or host.endswith("." + h) for h in config.IRC_OUR_HOSTS)
 
+    def nick_limit(self) -> int:
+        """Longest nick this server accepts.
+
+        From the server's own 005 when it has said, and the configured value
+        until then — 005 arrives before we are anywhere near rotating, so in
+        practice this is always the real number.
+        """
+        try:
+            said = getattr(self, "_isupport", {}).get("NICKLEN", 0)
+            return max(9, int(said) or config.IRC_NICK_MAXLEN)
+        except (TypeError, ValueError):
+            return config.IRC_NICK_MAXLEN
+
     def _rotation_allowed(self) -> bool:
         now = time.time()
         self._rotations_at = [t for t in self._rotations_at if now - t < 3600]
@@ -1265,23 +1306,48 @@ class IRCBridge:
         if self._nick.lower() != config.IRC_NICK.lower():
             self._reclaim_nick()
 
+    def _next_rotation_name(self, with_number: bool = False, force_base: str = "") -> str:
+        """The next name to ask for.
+
+        The owner's design: "i want it to be done by the bot itself that it can
+        change to a different id can add a number on back of it to avoid any
+        conflicts." The number is what makes it work with no setup — Luna47 is
+        almost certainly not registered to anyone, so NickServ has no reason to
+        force a rename, and it still reads as obviously her.
+
+        On a retry the base is not re-chosen: the name that came back taken is
+        the one to number.
+        """
+        bases = config.IRC_NICK_POOL or [config.IRC_NICK]
+        base = force_base or random.choice(bases)
+        now = self._nick.lower()
+        # With no pool the base IS the name she wears, so a bare try is a no-op.
+        if not with_number and config.IRC_NICK_POOL and base.lower() != now:
+            return base
+        stem = base[:max(3, self.nick_limit() - 3)]
+        for _ in range(25):
+            candidate = f"{stem}{random.randint(2, 99)}"
+            if candidate.lower() != now:
+                return candidate
+        return ""
+
     def _rotate_nick(self) -> bool:
-        if not config.IRC_NICK_ROTATE or not config.IRC_NICK_POOL:
+        if not config.IRC_NICK_ROTATE:
             return False
         if not self._connected or self._pending_rotation:
             return False
         if not self._rotation_allowed():
             return False
-        options = [n for n in config.IRC_NICK_POOL if n.lower() != self._nick.lower()]
-        if not options:
+        nxt = self._next_rotation_name()
+        if not nxt:
             return False
-        nxt = random.choice(options)
         # Still subject to the flood ceiling below: two limits that can only
         # ever make each other stricter is the right shape for something that
         # gets you killed for being wrong.
         if not self._nick_allowed():
             return False
         self._pending_rotation = nxt
+        self._rotation_numbered = False
         self._rotations_at.append(time.time())
         print(f"[irc_bridge] Rotating {self._nick} -> {nxt}")
         self._raw(f"NICK {nxt}")
