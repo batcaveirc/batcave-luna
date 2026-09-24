@@ -46,7 +46,7 @@ from cogs.admin_cog import mod_only
 # read back out of a channel that also contains ordinary conversation, so it is
 # anchored, fenced, and carries a version tag for when the shape changes.
 _LEDGER_RE = re.compile(
-    r"^`LEDGER1`\s+(?P<kind>warn|clear)\s+\|(?P<nick>[^|]{1,32})\|"
+    r"^`LEDGER1`\s+(?P<kind>warn|clear|tell|told)\s+\|(?P<nick>[^|]{1,32})\|"
     r"(?P<by>[^|]{1,64})\|(?P<at>\d{1,15})\|(?P<reason>.*)$"
 )
 # The relay format from utils/irc_bridge.py, for $seen.

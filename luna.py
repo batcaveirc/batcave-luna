@@ -72,6 +72,10 @@ COGS = [
     # hours, so "has this person been warned before?" had no true answer. Discord
     # keeps what it is told, so the record lives here.
     "cogs.records_cog",
+    # The three things only Luna can do: IRC has no scrollback and no memory,
+    # and Dracula forgets everything at each six-hourly handover. Discord keeps
+    # what it is told, so search, offline messages and room activity live here.
+    "cogs.memory_cog",
     "cogs.shared_cog",
     "cogs.social_cog",
 ]
@@ -307,6 +311,14 @@ async def help_cmd(ctx):
                 f"`{p}roll` `{p}flip` `{p}choose` `{p}calc` `{p}weather` `{p}ping`\n"
                 f"`{p}nicks` — who is in the IRC room · `{p}say <msg>` — cross-post\n"
                 f"`{p}mod on|off` *(ops)* — the automatic cover Dracula cannot see",
+        inline=False,
+    )
+    em.add_field(
+        name  = "🧠 Memory",
+        value = f"`{p}find <text>` — search what the room actually said (IRC has no\n"
+                "scrollback; I do)\n"
+                f"`{p}tell <nick> <msg>` — leave it, I hand it over when they next speak\n"
+                f"`{p}stats` — who talks here, and when the room is awake",
         inline=False,
     )
     em.add_field(
