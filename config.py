@@ -69,7 +69,18 @@ BATBOT_IRC_NICK       = os.getenv("BATBOT_IRC_NICK", "Vampire")
 # and, more importantly, a clash with a nick somebody else REGISTERED, which is
 # what would have NickServ force-rename her to a Guest. IRC_NICK_ROTATE=0 stops it.
 IRC_NICK_ROTATE       = os.getenv("IRC_NICK_ROTATE", "on").strip().lower() not in ("0", "false", "no", "off")
-# Optional: names to use INSTEAD of numbered variants of her own.
+# The names she rotates through. The owner corrected the first version of this:
+# "the nick changes with luna and dracula are just changing numbers behind them
+# they are not changing their nicks to something different everytime?" — right,
+# and the original ask was two things run together. "Change to a different id"
+# is the NAME; "add a number on back of it to avoid any conflicts" is what
+# happens when that name turns out to be taken. Luna47 every time is only the
+# second half. IRC_NICK_POOL replaces this list entirely.
+IRC_DEFAULT_NAMES     = [
+    "Selene", "Carmilla", "Lilith", "Nyx", "Hecate", "Noctua", "Vesper",
+    "Umbra", "Cynthia", "Phoebe", "Sable", "Stella", "Astra", "Eclipse",
+    "Nocturne", "Starling", "Nightjar", "Evenfall", "Duskfall", "Moonveil",
+]
 IRC_NICK_POOL         = [n.strip() for n in os.getenv("IRC_NICK_POOL", "").split(",") if n.strip()]
 # Longest nick the network accepts; over it the NICK is rejected, which looks
 # exactly like the name being taken.

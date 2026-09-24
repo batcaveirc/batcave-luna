@@ -190,6 +190,12 @@ class IRCBridge:
         self._wanted_nick = config.IRC_NICK
         self._pending_rotation = ""
         self._rotation_numbered = False
+        # Names that turned out to belong to somebody. A plain name can be
+        # REGISTERED to a person who is simply offline: no 433, we take it, and
+        # NickServ enforces seconds later and renames us to Guest####. We recover
+        # — but picking it again every hour is the room watching the same failure
+        # forever. Learn it once.
+        self._unusable_names = set()
         self._rotations_at = []
         self._last_rotate = 0.0
         self._isupport: Dict[str, str] = {}   # what the server says it supports
@@ -991,6 +997,15 @@ class IRCBridge:
                     self._pending_rotation = ""
                     print(f"[irc_bridge] Now wearing {new_nick}.")
                 elif new_nick.lower() != self._wanted_nick.lower():
+                    # A forced rename to Guest means the name we had just taken
+                    # belongs to a registered account. Strike it off the list.
+                    blamed = self._wanted_nick.lower()
+                    if (new_nick.lower().startswith("guest")
+                            and blamed != config.IRC_NICK.lower()
+                            and blamed not in self._unusable_names):
+                        self._unusable_names.add(blamed)
+                        print(f"[irc_bridge] {self._wanted_nick} is registered to somebody — "
+                              f"dropping it ({len(self._unusable_names)} dropped so far).")
                     print(f"[irc_bridge] Force-renamed to {new_nick} — reclaiming.")
                     self._revert_nick("NickServ enforced a rename")
             return
@@ -1318,15 +1333,27 @@ class IRCBridge:
         On a retry the base is not re-chosen: the name that came back taken is
         the one to number.
         """
-        bases = config.IRC_NICK_POOL or [config.IRC_NICK]
-        base = force_base or random.choice(bases)
         now = self._nick.lower()
-        # With no pool the base IS the name she wears, so a bare try is a no-op.
-        if not with_number and config.IRC_NICK_POOL and base.lower() != now:
+        base = force_base
+        if not base:
+            # A genuinely different name — not the one she wears, and not the
+            # bare stem of it either, since Selene -> Selene12 is precisely the
+            # "just changing numbers" that was rejected.
+            stem = now.rstrip("0123456789")
+            bank = config.IRC_NICK_POOL or config.IRC_DEFAULT_NAMES
+            options = [n for n in bank
+                       if n.lower() not in (now, stem)
+                       and n.lower() not in self._unusable_names]
+            if not options:
+                return ""
+            base = random.choice(options)
+        limit = self.nick_limit()
+        # Plain name first: the number is for CONFLICTS, not for naming.
+        if not with_number and len(base) <= limit and base.lower() != now:
             return base
-        stem = base[:max(3, self.nick_limit() - 3)]
+        trunk = base[:max(3, limit - 3)]
         for _ in range(25):
-            candidate = f"{stem}{random.randint(2, 99)}"
+            candidate = f"{trunk}{random.randint(2, 99)}"
             if candidate.lower() != now:
                 return candidate
         return ""

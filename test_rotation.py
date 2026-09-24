@@ -40,6 +40,7 @@ def bridge(pool=("Selene", "Carmilla", "Lilith"), rotate=True, cap=2):
     b._pending_rotation = ""
     b._rotation_numbered = False
     b._isupport = {}
+    b._unusable_names = set()
     b._rotations_at = []
     b._last_rotate = 0.0
     b._nick_times = []
@@ -95,12 +96,25 @@ print("\n— with nothing configured at all —")
 b = bridge(pool=())
 ok = b._rotate_nick()
 asked = b.sent[0].split()[-1] if b.sent else ""
-c("an empty pool still rotates, using her own name", ok and asked,
-  "this is the whole point: no pool, no NickServ GROUP, no manual step")
-c("the name is her own with a number on the end",
-  asked.startswith(config.IRC_NICK) and asked[len(config.IRC_NICK):].isdigit(),
-  f"asked for {asked!r}")
-c("and is not the bare name she is already wearing", asked != config.IRC_NICK)
+c("an empty pool still rotates, with no configuration at all", ok and asked,
+  "no pool, no NickServ GROUP, no manual step")
+# CHANGED ON PURPOSE. This used to require her own name plus digits. The owner
+# rejected that: "they are not changing their nicks to something different
+# everytime?" A plain rotation must now be a genuinely DIFFERENT name, and the
+# number is reserved for when that name comes back taken.
+c("she picks a genuinely different name, not her own with digits",
+  asked in config.IRC_DEFAULT_NAMES, f"asked for {asked!r}")
+c("and there is no number on it, because nothing was in conflict",
+  not any(ch.isdigit() for ch in asked),
+  f"asked for {asked!r} — numbering is the conflict fallback, not the naming scheme")
+c("and it is not the name she is already wearing", asked.lower() != config.IRC_NICK.lower())
+
+# Over several draws she must actually vary, or "rotation" is one rename.
+b2 = bridge(pool=())
+b2._nick = "Luna"
+drawn = {b2._next_rotation_name() for _ in range(40)}
+c("and across many draws she uses more than one name", len(drawn) >= 5,
+  f"only ever drew: {sorted(drawn)}")
 
 print("\n— a taken name gets numbered, not abandoned —")
 b = bridge(pool=("Selene",))
@@ -110,7 +124,15 @@ c("a pool name is tried plain first", first == "Selene", f"asked {first!r}")
 retry = b._next_rotation_name(True, first)
 c("and the retry is that SAME name with digits after it",
   retry.startswith("Selene") and retry[len("Selene"):].isdigit(),
-  f"retry was {retry!r} — numbering a DIFFERENT pool name answers a question nobody asked")
+  f"retry was {retry!r} — numbering a DIFFERENT name answers a question nobody asked")
+
+# The names she wears must not look like anybody else's, and must not be hers.
+overlap = [n for n in config.IRC_DEFAULT_NAMES if n.lower() == config.IRC_NICK.lower()]
+c("her own name is not in the rotation list", not overlap, f"{overlap}")
+c("every built-in name is a legal IRC nick",
+  all(n and n[0].isalpha() and n.isalnum() and len(n) <= 16
+      for n in config.IRC_DEFAULT_NAMES),
+  f"{[n for n in config.IRC_DEFAULT_NAMES if not (n and n[0].isalpha() and n.isalnum() and len(n) <= 16)]}")
 
 print("\n— a long base cannot overflow the network's nick limit —")
 b = bridge(pool=("A" * 40,))
@@ -160,6 +182,18 @@ c("the nick limit now comes from the server, not the config",
 made = b._next_rotation_name(True, "A" * 40)
 c("and a generated name respects it", 0 < len(made) <= 18,
   f"{made!r} is {len(made)} chars against a server limit of 18")
+
+print("\n— it only walks into a registered name once —")
+b = bridge(pool=())
+b._nick = "Luna"
+first = b._next_rotation_name()
+b._unusable_names.add(first.lower())
+later = {b._next_rotation_name() for _ in range(40)}
+c("a name that got us force-renamed is never offered again",
+  first not in later,
+  f"{first!r} came back after being struck off — the room would watch the same "
+  "Guest rename every hour forever")
+c("and there are still names left to use", len(later) >= 3, f"left with {sorted(later)}")
 
 print("\n— knowing our own, whatever they are called —")
 b = bridge()
