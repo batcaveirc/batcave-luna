@@ -46,6 +46,7 @@ from datetime import datetime, timedelta, timezone
 
 import discord
 from discord.ext import commands, tasks
+from cogs.admin_cog import mod_only
 
 import config
 
@@ -226,6 +227,7 @@ class AttendanceCog(commands.Cog, name="Attendance"):
     # ── what a moderator can ask ─────────────────────────────────────────────
 
     @commands.command(name="regulars")
+    @mod_only()
     async def regulars(self, ctx: commands.Context, top: int = 15) -> None:
         """Who talks here most days, out of the relayed history."""
         days = self._last or await self.count_days()
@@ -247,6 +249,7 @@ class AttendanceCog(commands.Cog, name="Attendance"):
         )
 
     @commands.command(name="sendregulars")
+    @mod_only()
     async def sendregulars(self, ctx: commands.Context) -> None:
         """Hand the tally to Dracula now, rather than waiting for the timer."""
         days = await self.count_days()

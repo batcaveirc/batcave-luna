@@ -45,6 +45,44 @@ def advertised_irc():
     return set(re.findall(r'\{p\}(\w+)', block))
 
 
+def primaries_and_aliases():
+    """Command names split into the real name and the extra names for it.
+
+    An alias does not need its own help entry — $warns is $warnings — but a
+    PRIMARY that nothing advertises is a command nobody can discover.
+    """
+    prim, alias = set(), set()
+    for f in glob.glob('cogs/*.py') + ['luna.py']:
+        src = pathlib.Path(f).read_text()
+        prim |= set(re.findall(
+            r'@(?:bot|commands)\.command\(\s*name\s*=\s*["\'](\w+)["\']', src))
+        prim |= set(re.findall(
+            r'@(?:bot|commands)\.group\(\s*\n?\s*name\s*=\s*["\'](\w+)["\']', src))
+        for al in re.findall(r'aliases\s*=\s*\[([^\]]*)\]', src):
+            alias |= set(re.findall(r'["\'](\w+)["\']', al))
+    return prim, alias
+
+
+def irc_commands():
+    return set(re.findall(r'def cmd_(\w+)\(',
+                          pathlib.Path('shared_cmds.py').read_text()))
+
+
+def discord_only_list():
+    src = pathlib.Path('shared_cmds.py').read_text()
+    block = re.search(r'DISCORD_ONLY = \{.*?\n    \}', src, re.S).group(0)
+    return set(re.findall(r'"(\w+)"', block))
+
+
+# Commands deliberately not advertised, and why. Anything else that exists
+# without appearing in a help listing fails the suite.
+HIDDEN = {
+    'about':     'a vanity blurb, not something anyone needs told about',
+    'batstatus': 'operational internals, and now mod-only',
+    's':         'the shared group prefix, reached through its subcommands',
+}
+
+
 def main():
     fails = 0
     have = registered()
@@ -72,6 +110,42 @@ def main():
         print(f"  [{'PASS' if ok else 'FAIL'}] {label} lists the mod commands"
               f"{'' if ok else ' — missing ' + ', '.join(missing)}")
         fails += 0 if ok else 1
+
+
+    # ── the OTHER direction ──────────────────────────────────────────────
+    #
+    # Everything above asks "does what we advertise exist?". Nothing asked
+    # "do we advertise what exists?", and that is the half the room actually
+    # complained about — twice. $find, $tell, $stats and $mood shipped and
+    # appeared in no help listing an IRC user could read, so as far as the room
+    # was concerned they were not there.
+    prim, alias = primaries_and_aliases()
+    irc = irc_commands()
+    everywhere = set()
+    for _, a in paths:
+        everywhere |= a
+    undiscoverable = sorted((prim | irc) - everywhere - alias - set(HIDDEN))
+    ok = not undiscoverable
+    print(f"  [{'PASS' if ok else 'FAIL'}] every command is advertised somewhere"
+          f"{'' if ok else ' — nothing mentions: ' + ', '.join(undiscoverable)}")
+    fails += 0 if ok else 1
+
+    stale_hidden = sorted(set(HIDDEN) - prim - irc)
+    ok = not stale_hidden
+    print(f"  [{'PASS' if ok else 'FAIL'}] the HIDDEN list has no ghosts"
+          f"{'' if ok else ' — gone: ' + ', '.join(stale_hidden)}")
+    fails += 0 if ok else 1
+
+    # DISCORD_ONLY decides whether IRC says "that lives on Discord" or the flatly
+    # untrue "I do not know $find". It was hand-written and 35 commands had
+    # drifted out of it. It is a fallback now — elsewhere_on_discord() asks the
+    # live bot first — but a fallback that lies is still worth failing over.
+    should_be = (prim | alias) - irc
+    drifted = sorted(should_be - discord_only_list())
+    ok = not drifted
+    print(f"  [{'PASS' if ok else 'FAIL'}] DISCORD_ONLY covers every Discord-side command"
+          f"{'' if ok else ' — missing ' + str(len(drifted)) + ': ' + ', '.join(drifted[:8])}")
+    fails += 0 if ok else 1
 
     print('\nALL PASS' if not fails else f'\n{fails} FAILED')
     return 1 if fails else 0

@@ -195,6 +195,7 @@ class RecordsCog(commands.Cog, name="Records"):
             )
 
     @commands.command(name="warnings", aliases=["warns", "record"])
+    @mod_only()
     async def warnings(self, ctx: commands.Context, nick: str) -> None:
         """Somebody's whole warning history."""
         rows = await self._read_ledger(nick)

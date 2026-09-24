@@ -146,15 +146,61 @@ class SharedCommands:
     # NOTHING — no reply, no error, no log — so 48 of the bot's 58 commands
     # were silently dead there and the only way to find out was to ask a human
     # why the bot ignored you.
+    # Every Discord command IRC cannot reach. This is the FALLBACK used when
+    # there is no live bot to ask (tests, and the window before the cogs
+    # finish loading) — elsewhere_on_discord() prefers the real thing.
+    # test_help_audit.py fails if this drifts out of date again, which is how
+    # $find came to be answered with "I do not know $find".
     DISCORD_ONLY = {
-        "op", "deop", "voice", "devoice", "mute", "unmute", "irckick", "ircban",
-        "ircunban", "ircwho", "ircnicks", "irctopic", "ircjoin", "ircleave",
-        "ircping", "ircinfo", "ircbridges", "ircnick", "ircreconnect", "ircraw",
-        "to", "ai", "about", "batstatus", "tarot", "horo", "moon", "spell",
-        "spellbook", "hex", "selfhex", "bless", "charm", "brew", "ritual",
-        "sacrifice", "seduce", "shards", "richest", "coven", "confess", "dare",
-        "truth", "tod", "dream", "tea", "ship", "vibe",
+        "about", "activity", "ai", "ask", "batcheck", "batstatus", "bridges",
+        "bs", "clearwarns", "commands", "compat", "confess", "dare", "deop",
+        "devoice", "find", "flirt", "gossip", "h", "ircban", "ircbridges",
+        "ircinfo", "ircjoin", "irckick", "ircleave", "ircnick", "ircnicks",
+        "ircpart", "ircping", "ircraw", "ircreconnect", "irctopic",
+        "ircunban", "ircwho", "luna", "match", "memo", "mood", "mute", "op",
+        "record", "regulars", "relay", "search", "secret", "seduce", "seen",
+        "sendregulars", "ship", "slowmode", "spill", "stats", "tea", "tell",
+        "to", "tod", "truth", "truthordare", "unmute", "unwarn", "vibe",
+        "vibecheck", "voice", "warn", "warnings", "warns", "who",
+        "s",
     }
+
+    def irc_command_names(self):
+        """What IRC can actually reach — read off the methods, not a list.
+
+        The "On IRC I answer: ..." line used to be typed out by hand, so it was
+        a promise nobody re-checked. Reading the cmd_ methods means it cannot
+        advertise something that is not there, or omit something that is.
+        """
+        return sorted(m[4:] for m in dir(self) if m.startswith("cmd_"))
+
+    def elsewhere_on_discord(self, cmd: str) -> bool:
+        """Does this command exist, just not here?
+
+        DISCORD_ONLY was a hand-written set, and it drifted the moment new
+        commands landed: $find, $tell, $stats and $mood were all answered on
+        IRC with "I do not know $find" — which is not true. It exists; it is
+        somewhere else, and those are completely different things to be told
+        when you are trying to work out whether the bot is broken.
+
+        So ask the live bot what it registered. A list maintained by hand
+        describes what somebody remembered; the bot describes what is.
+        DISCORD_ONLY stays as the answer when there is no bot to ask, which is
+        the case in tests and before the cogs finish loading.
+        """
+        bot = getattr(self, "bot", None)
+        if bot is None:
+            return cmd in self.DISCORD_ONLY
+        try:
+            names = set()
+            for c in bot.commands:
+                names.add(c.name)
+                names.update(c.aliases or ())
+            if not names:                      # cogs not loaded yet
+                return cmd in self.DISCORD_ONLY
+            return cmd in names
+        except Exception:
+            return cmd in self.DISCORD_ONLY
 
     def _run(self, platform: str, name: str, user_id, cmd: str, args: str) -> Optional[str]:
         """`_channel` is set by the caller so a command can check op status in
@@ -166,10 +212,10 @@ class SharedCommands:
             # was reported: "most commands did not work".
             if platform == "irc":
                 p = config.PREFIX
-                if cmd in self.DISCORD_ONLY:
+                here = " ".join(f"{p}{n}" for n in self.irc_command_names())
+                if self.elsewhere_on_discord(cmd):
                     return (f"{p}{cmd} works from Discord, not from here. "
-                            f"On IRC I answer: {p}help {p}ping {p}roll {p}flip "
-                            f"{p}choose {p}calc {p}weather {p}nicks {p}say {p}mod")
+                            f"On IRC I answer: {here}")
                 return f"I do not know {p}{cmd}. Try {p}help."
             return None
         try:

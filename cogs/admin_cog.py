@@ -138,6 +138,7 @@ class AdminCog(commands.Cog, name="Admin"):
     # ── BatBot status command ─────────────────────────────────────────────────
 
     @commands.command(name="batstatus", aliases=["bs", "batcheck"])
+    @mod_only()
     async def batstatus(self, ctx: commands.Context):
         """Check if BatBot is alive on IRC and Replit."""
         async with ctx.typing():
@@ -174,6 +175,7 @@ class AdminCog(commands.Cog, name="Admin"):
 
 
     @commands.command(name="ircnicks", aliases=["who"])
+    @mod_only()
     async def irc_nicks(self, ctx: commands.Context, irc_channel: str = ""):
         """Show who's currently in an IRC channel (defaults to mapped channel)."""
         if not self._bridge:
@@ -225,6 +227,7 @@ class AdminCog(commands.Cog, name="Admin"):
         await ctx.send(f"🚪 Bridge removed: Luna has left **{irc_channel}**.")
 
     @commands.command(name="ircbridges", aliases=["relay", "bridges"])
+    @mod_only()
     async def irc_bridges(self, ctx: commands.Context):
         """List all active Discord↔IRC bridge mappings."""
         if not self._bridge:
@@ -243,6 +246,7 @@ class AdminCog(commands.Cog, name="Admin"):
         await ctx.send(embed=em)
 
     @commands.command(name="ircping")
+    @mod_only()
     async def irc_ping(self, ctx: commands.Context):
         """Check IRC connection status."""
         if not self._bridge:
@@ -257,6 +261,7 @@ class AdminCog(commands.Cog, name="Admin"):
             await ctx.send(f"🔴 Not connected to IRC. Try `{config.PREFIX}ircreconnect`.")
 
     @commands.command(name="ircinfo")
+    @mod_only()
     async def irc_info(self, ctx: commands.Context):
         """Show IRC bridge status — server, nick, bridges, uptime."""
         if not self._bridge:

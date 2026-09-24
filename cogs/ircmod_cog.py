@@ -100,6 +100,7 @@ class IrcModCog(commands.Cog, name="IRC Moderation"):
     # ── Removal ──────────────────────────────────────────────────────────────
 
     @commands.command(name="to")
+    @mod_only()
     async def to_room(self, ctx, room: str = ""):
         """Choose which bridged IRC room this Discord channel talks to.
 
@@ -254,6 +255,7 @@ class IrcModCog(commands.Cog, name="IRC Moderation"):
         await ctx.send(f"🔊 Un-quieted `{mask}` in `{irc_ch}`.")
 
     @commands.command(name="ircwho")
+    @mod_only()
     async def irc_who(self, ctx: commands.Context):
         """Who is in the bridged room, and can Luna actually act there.
 
