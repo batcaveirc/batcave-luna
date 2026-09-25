@@ -279,7 +279,10 @@ class SharedCommands:
                 f"Discord channel talks to; {p}to alone shows where messages go. "
                 f"Or start one message with a room name to send just that line "
                 f"there. Also: {p}ping · {p}nicks who is here · {p}say <msg> "
-                f"cross-post · {p}ircbridges {p}ircjoin {p}ircleave {p}irctopic "
+                f"cross-post · {p}post <text> — place it in Discord VERBATIM, which "
+                f"{p}say cannot (it decorates), so it is the only way to test "
+                f"whether another bot there answers a bot at all (ops only) · "
+                f"{p}ircbridges {p}ircjoin {p}ircleave {p}irctopic "
                 f"{p}ircnicks {p}ircreconnect"
             )
         # The first line states what Luna is. HybridIRC's relay policy asks
@@ -391,6 +394,44 @@ class SharedCommands:
             if self.bridge:
                 self.bridge.send_to_irc(f"[{name}] {text}")
             return None
+
+    def cmd_post(self, platform, name, args):
+        """Put text into the bridged Discord channel EXACTLY as typed.
+
+        $say decorates what it sends — "**[vikram@IRC]** !weather london" — and a
+        prefix bot needs its prefix at the very start of the line, so $say can
+        never trigger one. This does not decorate.
+
+        It is NOT a way around Discord's rule that bots cannot invoke each
+        other's commands: this still arrives from a bot account with author.bot
+        set, so any bot that filters bot authors ignores it just the same. What
+        it settles is whether the bots in this server filter AT ALL — plenty
+        never added the guard. One message answers a question nobody has
+        actually asked yet.
+
+        Owners and channel operators only. A command that makes the bot say
+        arbitrary text is a way to wear its voice, and this room has been
+        attacked by people wearing other people's names.
+        """
+        if platform == "irc" and not is_irc_owner(name, self.bridge, self._channel):
+            return None                      # silent, like the other gated ones
+        text = (args or "").strip()
+        if not text:
+            return f"Usage: {config.PREFIX}post <exact text to place in Discord>"
+        if text.startswith(config.PREFIX):
+            return "That is my own prefix — it would only talk to me."
+        text = text[:300]
+        # Named in the LOG, not in the message: the text stays verbatim so it can
+        # trigger a prefix bot, but the action is never anonymous.
+        print(f"[shared_cmds] $post by {name} ({platform}): {text[:120]}")
+        if platform == "irc":
+            if self.bridge and self.bridge.loop and self.bridge.loop.is_running():
+                asyncio.run_coroutine_threadsafe(self._post_discord(text), self.bridge.loop)
+                return "placed in Discord verbatim."
+            return "Discord is not reachable right now."
+        if self.bridge:
+            self.bridge.send_to_irc(text)
+        return None
 
     async def _post_discord(self, text: str) -> None:
         if not self.bot:
