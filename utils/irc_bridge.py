@@ -55,6 +55,7 @@ _SEND_DELAY          = 0.5   # seconds between outbound IRC messages (rate-limit
 
 _NICK_RECLAIM_SECS = 60      # how often to check we still hold our own nick
 _MEMORY_COOLDOWN = 8         # seconds between one person's history commands
+_RECENT_LINES = 25           # live tail kept per room for grounding the AI
 
 # Dracula keeps the trust list in ChanServ FLAGS on its own channel, and that is
 # the ONLY place it lives. Luna had a separate list in a secret, read once at
@@ -218,6 +219,12 @@ class IRCBridge:
         self._last_rotate = 0.0
         self._isupport: Dict[str, str] = {}   # what the server says it supports
         self._ai_cooldown: Dict[str, float] = {}   # nick(lower) -> ts
+        # The last few lines per room, so Luna can answer "who was talking"
+        # and "what's the convo" from what was ACTUALLY said instead of
+        # inventing it — which is how "who was talking" got answered with a
+        # summary of the 1872 novella Carmilla. In memory only, tiny, and it
+        # is the live tail; the durable record still lives in Discord.
+        self._recent: Dict[str, deque] = {}
         self._ai_last_channel = 0.0
         self._connect_time = time.time()
         self._last_tags: Dict[str, str] = {}
@@ -527,6 +534,12 @@ class IRCBridge:
 
         from cogs.ai_cog import ask
 
+        # What the room has actually been saying, so "who was talking" and
+        # "what's the convo" are answered from fact, not invented. The line the
+        # caller just typed is already in here.
+        lines = list(self._recent.get(irc_ch.lower(), ()))[-_RECENT_LINES:]
+        context = "\n".join(f"{who}: {said}" for who, said in lines)
+
         def _done(fut):
             try:
                 reply = fut.result()
@@ -538,7 +551,7 @@ class IRCBridge:
                 self._queue(irc_ch, f"{nick}: {one_line[:400]}")
 
         try:
-            fut = asyncio.run_coroutine_threadsafe(ask(prompt), self.loop)
+            fut = asyncio.run_coroutine_threadsafe(ask(prompt, context=context), self.loop)
             fut.add_done_callback(_done)
             return True
         except Exception as e:  # noqa: BLE001
@@ -1169,6 +1182,12 @@ class IRCBridge:
             # answering it would have Luna reply to questions from hours ago.
             if self._is_replay(getattr(self, "_last_tags", {})):
                 return
+
+            # Keep the live tail of the room for grounding Luna's answers. Every
+            # line, not only ones aimed at her, because "who was talking" is a
+            # question about everyone else.
+            buf = self._recent.setdefault(target.lower(), deque(maxlen=_RECENT_LINES))
+            buf.append((nick, message[:300]))
 
             # ── A room that is not ours: listen only ──
             # Luna is a guest in the rooms she watches. She never speaks or
