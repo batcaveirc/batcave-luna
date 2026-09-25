@@ -93,6 +93,15 @@ jobs:
           # Vhosts our own bots wear. A vhost belongs to the connection, so this
           # survives a rename where BATBOT_IRC_NICK cannot.
           IRC_OUR_HOSTS: ${{ secrets.IRC_OUR_HOSTS || 'Sat.Chit.Ananda,Keeping.The.Night.Company' }}
+          # ── Room following ─────────────────────────────────────────────
+          # OFF unless set. When on, Luna sits in IRC_FOLLOW_ROOMS (plus any an
+          # op adds with $follow, or she is invited to by a trusted user) and
+          # LEAVES each once it has been quiet for FOLLOW_IDLE_MIN. She never
+          # rejoins on a timer — that would be the join/part churn this network
+          # kills bots for — so coming back is an invite or a command.
+          IRC_FOLLOW: ${{ secrets.IRC_FOLLOW || '' }}
+          IRC_FOLLOW_ROOMS: ${{ secrets.IRC_FOLLOW_ROOMS || '' }}
+          FOLLOW_IDLE_MIN: ${{ secrets.FOLLOW_IDLE_MIN || '45' }}
           # The primary room.
           # #batcave is the PRIMARY, because the first mapping registered owns
           # the Discord -> IRC direction and the owner wants replies landing
