@@ -74,7 +74,12 @@ c("only Luna's own lines count as the room speaking",
   "m.author.id != self.bot.user.id" in src,
   "otherwise somebody types the relay format and invents a quote")
 c("a one-letter search is refused", "at least three characters" in src)
-c("and the output is bounded", "hits[:10]" in src and "len(hits) >= 60" in src)
+# The bound moved when the search was pulled out of the command so IRC could
+# reach it too: the scan cap is now a parameter and the display cap a slice.
+# Same intent, different shape — the old assertion pinned the wording.
+c("and the output is bounded", "hits[:10]" in src
+  and "cap: int = 60" in src and "[:cap]" in src,
+  "an unbounded history scan is both a slow command and a flood risk")
 
 print("\n— $stats —")
 c("it counts people, hours and rooms", all(w in src for w in ("talkers", "hours", "rooms")))

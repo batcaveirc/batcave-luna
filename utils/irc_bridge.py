@@ -11,6 +11,7 @@ import asyncio
 import os
 import random
 import re
+from fnmatch import fnmatch
 import socket
 import ssl
 import threading
@@ -53,6 +54,18 @@ _SOCKET_TIMEOUT      = 30    # detect dead connections fast
 _SEND_DELAY          = 0.5   # seconds between outbound IRC messages (rate-limit)
 
 _NICK_RECLAIM_SECS = 60      # how often to check we still hold our own nick
+_MEMORY_COOLDOWN = 8         # seconds between one person's history commands
+
+# Dracula keeps the trust list in ChanServ FLAGS on its own channel, and that is
+# the ONLY place it lives. Luna had a separate list in a secret, read once at
+# startup — so "!!trust add hazel" meant nothing to her, and seconds later she
+# kicked hazel out of the room. Two lists for one idea is how that happens; this
+# reads the same one Dracula writes.
+TRUST_CHANNEL = os.getenv("IRC_TRUST_CHANNEL", "#batcave-trust")
+_TRUST_REFRESH = 3600
+_TRUST_RETRY = 90
+_TRUST_ROW = re.compile(r"^\s*\d+\s+(\S+)\s+(\+\S*)")
+_TRUST_END = re.compile(r"End of .* FLAGS listing", re.I)
 # 12s was long enough that a normal back-and-forth got swallowed: someone says
 # hello, she answers, they reply and she ignores them. Silence reads as "the
 # bot is broken", which is worse than the flood these numbers were guarding
@@ -196,6 +209,11 @@ class IRCBridge:
         # — but picking it again every hour is the room watching the same failure
         # forever. Learn it once.
         self._unusable_names = set()
+        self._memory_cooldown: Dict[str, float] = {}   # per nick; these scans are not cheap
+        self._trusted: Set[str] = set()
+        self._trusted_pending: Set[str] = set()
+        self._trust_loaded = False
+        self._trust_asked = 0.0
         self._rotations_at = []
         self._last_rotate = 0.0
         self._isupport: Dict[str, str] = {}   # what the server says it supports
@@ -527,6 +545,95 @@ class IRCBridge:
             print(f"[irc_bridge] AI dispatch failed: {e}")
             return False
 
+    # Commands whose work lives on the Discord side. Until now these existed
+    # only as Discord commands, so from IRC — where the room actually is — they
+    # did nothing at all and were listed nowhere. The owner: "i dont see them in
+    # $help did you update it or no".
+    MEMORY_CMDS = ("find", "search", "tell", "memo", "stats", "activity",
+                   "quote", "onthisday", "rewind", "backthen", "seen", "mood")
+
+    def try_memory_command(self, irc_ch: str, nick: str, text: str) -> bool:
+        """Handle a memory command from IRC. True if we took it."""
+        if self.loop is None or not self.loop.is_running():
+            return False
+        body = text[len(config.PREFIX):]
+        if body.startswith(config.PREFIX):
+            return False                      # another bot's doubled prefix
+        parts = body.split(None, 1)
+        if not parts:
+            return False
+        cmd = parts[0].lower()
+        args = parts[1].strip() if len(parts) > 1 else ""
+        if cmd not in self.MEMORY_CMDS:
+            return False
+
+        cog = None
+        try:
+            cog = self.bot.get_cog("Memory") if self.bot else None
+        except Exception:                     # noqa: BLE001
+            cog = None
+        if cog is None:
+            # Say so. A command that exists, is advertised, and answers with
+            # silence is the failure this project keeps shipping.
+            self._notice(nick, "My memory is not loaded right now — try again shortly.")
+            return True
+
+        # One at a time per person: each of these scans thousands of messages.
+        now = time.time()
+        if now - self._memory_cooldown.get(nick.lower(), 0.0) < _MEMORY_COOLDOWN:
+            self._notice(nick, "Give me a moment — I am still reading.")
+            return True
+        self._memory_cooldown[nick.lower()] = now
+
+        if cmd in ("find", "search"):
+            coro = cog.irc_find(args)
+        elif cmd in ("tell", "memo"):
+            bits = args.split(None, 1)
+            if len(bits) < 2:
+                self._notice(nick, f"{config.PREFIX}tell <nick> <message>")
+                return True
+            coro = cog.irc_tell(nick, bits[0], bits[1])
+        elif cmd in ("stats", "activity"):
+            coro = cog.irc_stats()
+        elif cmd == "seen":
+            coro = cog.irc_seen(args)
+        elif cmd == "mood":
+            coro = cog.irc_mood()
+        elif cmd == "quote":
+            coro = cog.irc_quote(args.split()[0] if args else "")
+        else:                                  # onthisday / rewind / backthen
+            days = 7
+            if args.split() and args.split()[0].lstrip("-").isdigit():
+                days = max(1, min(60, int(args.split()[0])))
+            coro = cog.irc_rewind(days)
+
+        return self._answer_from_discord(irc_ch, nick, coro, cmd)
+
+    def _answer_from_discord(self, irc_ch: str, nick: str, coro, what: str) -> bool:
+        """Run a coroutine on Discord's loop, put the answer back in the room."""
+        def _done(fut):
+            try:
+                reply = fut.result()
+            except Exception as e:             # noqa: BLE001
+                # Never silent: the person is waiting and would otherwise read
+                # this as the bot being broken.
+                print(f"[irc_bridge] {what} failed: {e}")
+                self._queue(irc_ch, f"{nick}: that did not work — {str(e)[:120]}")
+                return
+            if not reply:
+                self._queue(irc_ch, f"{nick}: nothing to show.")
+                return
+            for line in _wrap(f"{nick}: {reply}")[:3]:
+                self._queue(irc_ch, line)
+
+        try:
+            fut = asyncio.run_coroutine_threadsafe(coro, self.loop)
+            fut.add_done_callback(_done)
+            return True
+        except Exception as e:                 # noqa: BLE001
+            print(f"[irc_bridge] {what} dispatch failed: {e}")
+            return False
+
     def _reclaim_nick(self) -> None:
         """Re-identify, evict whatever holds our nick, take it back, rejoin.
 
@@ -721,6 +828,15 @@ class IRCBridge:
                     and time.time() - self._last_rotate > config.IRC_NICK_ROTATE_MIN * 60):
                 self._last_rotate = time.time()
                 self._rotate_nick()
+            # Keep the trust list current. Asked more often until it has ever
+            # arrived, because an empty list means nobody is exempt — and being
+            # wrong in that direction is what removed a trusted user.
+            if (self._connected and TRUST_CHANNEL
+                    and time.time() - self._trust_asked
+                    > (_TRUST_REFRESH if self._trust_loaded else _TRUST_RETRY)):
+                self._trust_asked = time.time()
+                self._trusted_pending = set()
+                self._raw(f"PRIVMSG ChanServ :FLAGS {TRUST_CHANNEL}")
             buf += data
             while "\r\n" in buf:
                 line, buf = buf.split("\r\n", 1)
@@ -763,6 +879,26 @@ class IRCBridge:
         if line.startswith("ERROR"):
             print(f"[irc_bridge] Server error: {line}")
             raise ConnectionError(line)
+
+        # ChanServ's FLAGS listing, which is the trust list.
+        cs = re.match(r"^:ChanServ!\S+\s+NOTICE\s+\S+\s+:(.*)$", line, re.I)
+        if cs:
+            body = cs.group(1).strip()
+            row = _TRUST_ROW.match(body)
+            if row:
+                # +V is autovoice, which is what being a regular means here, so
+                # the two stay in step. +F is a founder.
+                if "V" in row.group(2) or "F" in row.group(2):
+                    self._trusted_pending.add(row.group(1).lower())
+                return
+            if _TRUST_END.search(body):
+                self._trusted = set(self._trusted_pending)
+                self._trusted_pending = set()
+                self._trust_loaded = True
+                print(f"[irc_bridge] Trust list: {len(self._trusted)} entries "
+                      f"from {TRUST_CHANNEL}.")
+                return
+            # anything else from ChanServ falls through to the normal handling
 
         num = numeric(line)
 
@@ -1087,6 +1223,14 @@ class IRCBridge:
                 # the bridge-mapping check so they work in any channel she is
                 # in, not only a bridged one.
                 if message.startswith(config.PREFIX):
+                    # The memory commands come FIRST, because they cannot answer
+                    # from this thread: they read Discord history, the call is
+                    # async, and blocking the IRC reader for it would stall the
+                    # relay for everyone in the room. They go to Discord's loop
+                    # and the answer arrives through the queue, exactly as $ai
+                    # already does.
+                    if self.try_memory_command(target, nick, message):
+                        return
                     try:
                         from shared_cmds import SharedCommands
                         reply = SharedCommands.get(self.bot, self).dispatch_irc(
@@ -1281,6 +1425,29 @@ class IRCBridge:
     #
     # Six in five minutes is generous for a bot that should change nick twice per
     # connect at most, and far under anything the server objects to.
+    def trust_loaded(self) -> bool:
+        """Whether the trust list has ever arrived. Until it has, we know
+        nothing about who is exempt, and acting on that ignorance is what
+        removed somebody the owner had just trusted."""
+        return self._trust_loaded
+
+    def is_trusted(self, nick: str) -> bool:
+        n = str(nick or "").lower()
+        if not n:
+            return False
+        if n in self._trusted:
+            return True
+        # Entries can be hostmasks rather than names — "*!*@hazel.sees.u.peek"
+        # is what !!protect writes — so a regular who changes nick is still
+        # covered.
+        host = (self._hosts.get(n) or "")
+        if host:
+            ident = f"{n}!{host}".lower()
+            for entry in self._trusted:
+                if any(ch in entry for ch in "!@*") and fnmatch(ident, entry):
+                    return True
+        return False
+
     def is_one_of_ours(self, nick: str) -> bool:
         """One of our own bots, known by the host rather than the name.
 

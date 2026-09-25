@@ -256,6 +256,19 @@ class SharedCommands:
                 f"disguised text, mass pings, colour flooding, adverts, walls "
                 f"of text, join flooding. Warn first, kick second, never a ban."
             )
+        if sub in ("memory", "mem", "history"):
+            # These read the relayed history, so they are the one thing Luna can
+            # do that IRC itself cannot: the room has no scrollback and she has
+            # weeks of it.
+            return (
+                f"[\x02Memory\x02] I remember what this room has said. "
+                f"{p}find <text> — search it · "
+                f"{p}quote [nick] — something somebody actually said · "
+                f"{p}onthisday [days] — what was being said a week ago · "
+                f"{p}tell <nick> <message> — I pass it on when they next speak · "
+                f"{p}stats — who talks here and when · "
+                f"{p}seen <nick> · {p}mood"
+            )
         if sub in ("irc", "bridge"):
             # $to matters most here. Two IRC rooms feed one Discord channel, so
             # without it everything typed in Discord goes to whichever room was
@@ -277,10 +290,10 @@ class SharedCommands:
             f"what you type here is relayed, and replies come back tagged. "
             f"(prefix \x02{p}\x02) — "
             f"Talk to me: just say my name, or {p}ai <question> · "
+            f"Memory: {p}find {p}quote {p}onthisday {p}tell {p}stats · "
             f"Fun: {p}roll {p}flip {p}choose {p}calc {p}weather · "
             f"Bridge: {p}ping {p}nicks {p}say · "
-            f"From DISCORD only: {p}to {p}op {p}devoice {p}irckick {p}ircban {p}ai … · "
-            f"More: {p}help fun | {p}help bridge | {p}help mod"
+            f"More: {p}help memory | {p}help fun | {p}help bridge | {p}help mod"
         )
 
 

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import re
+import random
 import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
@@ -80,35 +81,176 @@ class MemoryCog(commands.Cog, name="Memory"):
 
     # ── $find ────────────────────────────────────────────────────────────────
 
-    @commands.command(name="find", aliases=["search"])
-    async def find(self, ctx: commands.Context, *, text: str) -> None:
-        """Search what the room has said. IRC has no scrollback; this is it."""
-        needle = text.strip().lower()
-        if len(needle) < 3:
-            await ctx.send("Give me at least three characters to look for.")
-            return
-        since = datetime.now(timezone.utc) - timedelta(days=max(1, _WINDOW_DAYS))
-        hits: list[tuple[datetime, str, str, str]] = []
+    # ── The work, separated from how it was asked for ────────────────────────
+    #
+    # These used to live inside the command bodies, tangled with ctx.send, which
+    # meant IRC could not reach a single one of them — and IRC is where the room
+    # actually is. The owner put it plainly: the new commands were not in $help
+    # and did not work, because they were Discord-side and nothing said so.
+    #
+    # So the work returns DATA and the callers dress it. Discord gets code
+    # blocks and ten rows; IRC gets one compact line, because IRC floods.
+
+    async def _scan(self, since, until=None, cap: int = _SCAN):
+        """Every relayed line in a window, newest first: (at, room, nick, said).
+
+        One scanner for every history feature. It was copied into each command
+        before, which is how two of them ended up disagreeing about what counts
+        as a relayed line.
+        """
+        out: list[tuple] = []
         for ch in self._relay_channels():
             try:
-                async for m in ch.history(limit=_SCAN, after=since, oldest_first=False):
+                async for m in ch.history(limit=cap, after=since, before=until,
+                                          oldest_first=False):
                     if m.author.id != self.bot.user.id and not m.webhook_id:
                         continue
                     hit = _RELAY_RE.match(m.content or "")
                     if not hit:
                         continue
                     said = (m.content or "").split(":", 1)[-1].strip()
-                    if needle not in said.lower():
+                    if not said:
                         continue
-                    hits.append((m.created_at, hit.group("room"), hit.group("nick"), said))
-                    if len(hits) >= 60:
-                        break
+                    out.append((m.created_at, hit.group("room"),
+                                hit.group("nick"), said))
             except discord.Forbidden:
                 continue
+        out.sort(key=lambda r: r[0], reverse=True)
+        return out
+
+    async def search(self, needle: str, cap: int = 60) -> list:
+        needle = needle.strip().lower()
+        since = datetime.now(timezone.utc) - timedelta(days=max(1, _WINDOW_DAYS))
+        return [r for r in await self._scan(since) if needle in r[3].lower()][:cap]
+
+    async def activity(self, days: int = 7):
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        talkers: Counter = Counter()
+        hours: Counter = Counter()
+        rooms: Counter = Counter()
+        for at, room, nick, _said in await self._scan(since):
+            if nick.lower() in _NEVER_TOUCH:
+                continue
+            talkers[nick] += 1
+            hours[at.hour] += 1
+            rooms[room] += 1
+        return sum(talkers.values()), talkers, hours, rooms
+
+    async def sample(self, nick: str = "", days: int = 30, min_len: int = 25):
+        """One line somebody actually said. Commands and bots are skipped —
+        quoting the bot back at the room is not a quote."""
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        pool = [r for r in await self._scan(since)
+                if len(r[3]) >= min_len
+                and r[2].lower() not in _NEVER_TOUCH
+                and not r[3].startswith(config.PREFIX)
+                and (not nick or r[2].lower() == nick.lower())]
+        return random.choice(pool) if pool else None
+
+    async def rewind(self, days_back: int = 7, span_hours: int = 2, cap: int = 5):
+        """What the room was saying this time N days ago, oldest first."""
+        until = datetime.now(timezone.utc) - timedelta(days=days_back)
+        rows = await self._scan(until - timedelta(hours=span_hours), until=until)
+        return list(reversed([r for r in rows if r[2].lower() not in _NEVER_TOUCH][:cap]))
+
+    # ── IRC-shaped answers ───────────────────────────────────────────────────
+    # One line where possible. A three-line reply on IRC pushes the
+    # conversation off a phone screen, and the pacer sends about two a second.
+
+    async def irc_tell(self, author: str, nick: str, message: str) -> str:
+        """Leave a message from an IRC nick. The ledger keys on the name given,
+        so this is deliberately the same store the Discord side writes to —
+        one inbox, not two that disagree."""
+        if not _NICK_OK.match(nick):
+            return "That is not a valid IRC nick."
+        if nick.lower() in _NEVER_TOUCH:
+            return "That one is a bot — it will not read its messages."
+        if nick.lower() == author.lower():
+            return "You are right here."
+        if not message.strip():
+            return f"And what should I tell {nick}?"
+        ch = self._ledger_channel()
+        if ch is None:
+            # A message I cannot store is one that quietly disappears, which is
+            # worse than refusing it.
+            return "I have nowhere to keep it right now, so I will not pretend to."
+        mine = [r for r in await self._pending()
+                if r["nick"].lower() == nick.lower()
+                and r["by"].split("#")[0].lower() == author.lower()]
+        if len(mine) >= _MAX_PENDING:
+            return f"You already have {len(mine)} waiting for {nick}."
+        safe = lambda t, n: str(t).replace("|", "/").replace("\n", " ")[:n]  # noqa: E731
+        await ch.send(f"`LEDGER1` tell |{safe(nick, 32)}|{safe(author, 64)}|"
+                      f"{int(time.time())}|{safe(message, 300)}")
+        return f"I'll give that to {nick} when they next speak."
+
+    async def irc_seen(self, nick: str) -> str:
+        """Last heard from. Lives here rather than in records_cog because it
+        reads the same relayed history as everything else, and two scanners
+        over one source is how they drift apart."""
+        if not nick.strip():
+            return f"{config.PREFIX}seen <nick>"
+        want = nick.strip().lower()
+        since = datetime.now(timezone.utc) - timedelta(days=max(1, _WINDOW_DAYS))
+        for at, room, who, said in await self._scan(since):
+            if who.lower() == want:
+                ago = _ago((datetime.now(timezone.utc) - at).total_seconds()).strip()
+                return f'{who} was last heard {ago} in {room}: "{said[:120]}"'
+        return f"I have not heard {nick[:32]} in the last {_WINDOW_DAYS} days."
+
+    async def irc_mood(self) -> str:
+        from utils import moods
+        name, line = moods.current()
+        return f"Tonight I am {name} — {line.split(':', 1)[-1].strip()}"
+
+    async def irc_find(self, needle: str) -> str:
+        if len(needle.strip()) < 3:
+            return "Give me at least three characters to look for."
+        hits = await self.search(needle)
+        if not hits:
+            return f'Nothing matching "{needle[:40]}" in the last {_WINDOW_DAYS} days.'
+        now = datetime.now(timezone.utc)
+        body = " · ".join(
+            f"[{_ago((now - at).total_seconds()).strip()}] {nick}: {said[:70]}"
+            for at, _room, nick, said in hits[:3])
+        more = f" (+{len(hits) - 3} older)" if len(hits) > 3 else ""
+        return f'{len(hits)} for "{needle[:40]}" — {body}{more}'
+
+    async def irc_stats(self) -> str:
+        total, talkers, hours, rooms = await self.activity()
+        if not total:
+            return "No relayed history to count yet."
+        top = ", ".join(f"{n} ({c})" for n, c in talkers.most_common(5))
+        busy = ", ".join(f"{h:02d}:00" for h, _ in hours.most_common(2))
+        where = ", ".join(r for r, _ in rooms.most_common(2))
+        return f"Last 7 days: {total} lines in {where}. Busiest {busy} UTC. Talking most: {top}"
+
+    async def irc_quote(self, nick: str = "") -> str:
+        row = await self.sample(nick)
+        if not row:
+            return (f"I have nothing quotable from {nick} yet." if nick
+                    else "Nothing worth quoting in my memory yet.")
+        at, _room, who, said = row
+        ago = _ago((datetime.now(timezone.utc) - at).total_seconds()).strip()
+        return f'{who}, {ago}: "{said[:220]}"'
+
+    async def irc_rewind(self, days_back: int = 7) -> str:
+        rows = await self.rewind(days_back)
+        if not rows:
+            return f"I have nothing from {days_back} day(s) ago."
+        body = " · ".join(f"{nick}: {said[:60]}" for _at, _room, nick, said in rows[:4])
+        return f"{days_back} day(s) ago — {body}"
+
+    @commands.command(name="find", aliases=["search"])
+    async def find(self, ctx: commands.Context, *, text: str) -> None:
+        """Search what the room has said. IRC has no scrollback; this is it."""
+        if len(text.strip()) < 3:
+            await ctx.send("Give me at least three characters to look for.")
+            return
+        hits = await self.search(text)
         if not hits:
             await ctx.send(f"Nothing matching **{text[:60]}** in the last {_WINDOW_DAYS} days.")
             return
-        hits.sort(key=lambda h: h[0], reverse=True)
         now = datetime.now(timezone.utc)
         lines = [f"{_ago((now - at).total_seconds()):>9}  [{room}] {nick}: {said[:90]}"
                  for at, room, nick, said in hits[:10]]
@@ -209,28 +351,7 @@ class MemoryCog(commands.Cog, name="Memory"):
     @commands.command(name="stats", aliases=["activity"])
     async def stats(self, ctx: commands.Context) -> None:
         """Who talks here, and when the room is actually awake."""
-        since = datetime.now(timezone.utc) - timedelta(days=7)
-        talkers: Counter = Counter()
-        hours: Counter = Counter()
-        rooms: Counter = Counter()
-        total = 0
-        for ch in self._relay_channels():
-            try:
-                async for m in ch.history(limit=_SCAN, after=since, oldest_first=False):
-                    if m.author.id != self.bot.user.id and not m.webhook_id:
-                        continue
-                    hit = _RELAY_RE.match(m.content or "")
-                    if not hit:
-                        continue
-                    nick = hit.group("nick").lower()
-                    if nick in _NEVER_TOUCH:
-                        continue
-                    talkers[hit.group("nick")] += 1
-                    hours[m.created_at.hour] += 1
-                    rooms[hit.group("room")] += 1
-                    total += 1
-            except discord.Forbidden:
-                continue
+        total, talkers, hours, rooms = await self.activity()
         if not total:
             await ctx.send("No relayed history to count yet.")
             return
@@ -244,6 +365,28 @@ class MemoryCog(commands.Cog, name="Memory"):
             + f"\nBusiest hours: **{busiest}**\n```\n{body}\n```"
         )
 
+
+    # ── $quote / $onthisday ──────────────────────────────────────────────────
+    #
+    # The owner asked for "more fun stuff as it remember conversations from
+    # discord history". These are that: the memory already exists, and the only
+    # reason it was dull was that nothing pointed at it except a search box.
+
+    @commands.command(name="quote")
+    async def quote(self, ctx: commands.Context, nick: str = "") -> None:
+        """Something somebody actually said."""
+        await ctx.send(await self.irc_quote(nick))
+
+    @commands.command(name="onthisday", aliases=["rewind", "backthen"])
+    async def onthisday(self, ctx: commands.Context, days: int = 7) -> None:
+        """What the room was saying this time a few days ago."""
+        days = max(1, min(60, days))
+        rows = await self.rewind(days)
+        if not rows:
+            await ctx.send(f"I have nothing from {days} day(s) ago.")
+            return
+        lines = [f"[{room}] {nick}: {said[:90]}" for _at, room, nick, said in rows]
+        await ctx.send(f"**{days} day(s) ago**\n```\n" + "\n".join(lines) + "\n```")
 
     # ── $mood ────────────────────────────────────────────────────────────────
 

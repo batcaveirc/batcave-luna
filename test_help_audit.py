@@ -64,8 +64,24 @@ def primaries_and_aliases():
 
 
 def irc_commands():
-    return set(re.findall(r'def cmd_(\w+)\(',
-                          pathlib.Path('shared_cmds.py').read_text()))
+    """Everything an IRC user can actually reach.
+
+    Not just the cmd_ functions any more. The memory commands ($find, $quote,
+    $onthisday, $tell, $stats) are answered by the bridge, which hands them to
+    Discord's loop and queues the reply back — so they are reachable from IRC
+    without being cmd_ functions, and DISCORD_ONLY must not claim otherwise.
+    """
+    names = set(re.findall(r'def cmd_(\w+)\(',
+                           pathlib.Path('shared_cmds.py').read_text()))
+    bridge = pathlib.Path('utils/irc_bridge.py').read_text()
+    block = re.search(r'MEMORY_CMDS = \(([^)]*)\)', bridge)
+    if block:
+        names |= set(re.findall(r'"(\w+)"', block.group(1)))
+    # And the third path: a couple are matched straight out of the line handler
+    # rather than going through either dispatcher — $ai is one. Missing this made
+    # the reachability check below fail on a command that works perfectly well.
+    names |= set(re.findall(r'startswith\(f"\{config\.PREFIX\}(\w+)', bridge))
+    return names
 
 
 def discord_only_list():
@@ -81,6 +97,21 @@ HIDDEN = {
     'batstatus': 'operational internals, and now mod-only',
     's':         'the shared group prefix, reached through its subcommands',
 }
+
+
+def irc_reachable_help():
+    """The parts of the IRC help a person in the room reads as "type this here".
+
+    The mod and bridge subtopics deliberately describe DISCORD-side commands and
+    say so, so they are excluded. The top-level listing and the memory section
+    make no such caveat.
+    """
+    src = pathlib.Path('shared_cmds.py').read_text()
+    block = re.search(r'def cmd_help\(self.*?(?=\n    def )', src, re.S).group(0)
+    mem = re.search(r'\[\\x02Memory\\x02\].*?\n            \)', block, re.S)
+    top = re.search(r'# The first line states what Luna is\..*?\n        \)', block, re.S)
+    text = (mem.group(0) if mem else '') + (top.group(0) if top else '')
+    return set(re.findall(r'\{p\}(\w+)', text))
 
 
 def main():
@@ -145,6 +176,17 @@ def main():
     ok = not drifted
     print(f"  [{'PASS' if ok else 'FAIL'}] DISCORD_ONLY covers every Discord-side command"
           f"{'' if ok else ' — missing ' + str(len(drifted)) + ': ' + ', '.join(drifted[:8])}")
+    fails += 0 if ok else 1
+
+    # The check that would have caught me. Everything above asks whether an
+    # advertised command EXISTS somewhere; nothing asked whether a command
+    # advertised to IRC can be run FROM IRC. I had just listed $seen and $mood
+    # in the IRC memory help while both were Discord-only — advertised and dead,
+    # the exact failure this project keeps shipping, committed while fixing it.
+    unreachable = sorted(irc_reachable_help() - irc_commands())
+    ok = not unreachable
+    print(f"  [{'PASS' if ok else 'FAIL'}] every command IRC help offers can be run from IRC"
+          f"{'' if ok else ' — advertised but unreachable: ' + ', '.join(unreachable)}")
     fails += 0 if ok else 1
 
     print('\nALL PASS' if not fails else f'\n{fails} FAILED')

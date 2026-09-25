@@ -151,6 +151,23 @@ class Moderator:
         n = nick.lower()
         if n in self._never or n in self._whitelist:
             return True
+        # One of our own bots, known by VHOST rather than by name. _never is a
+        # list of NICKS, and both bots now rotate theirs — so a renamed Dracula
+        # was about to be moderated by Luna.
+        try:
+            if self.bridge.is_one_of_ours(nick):
+                return True
+        except Exception:                      # noqa: BLE001
+            pass
+        # The live trust list, straight out of ChanServ. LUNA_WHITELIST_IRC is a
+        # secret read once at startup, so "!!trust add hazel" meant nothing here
+        # and hazel was kicked seconds after being trusted. The authoritative
+        # list is the one Dracula writes.
+        try:
+            if self.bridge.is_trusted(nick):
+                return True
+        except Exception:                      # noqa: BLE001
+            pass
         if self._trusted_masks:
             host = ""
             try:
@@ -184,7 +201,16 @@ class Moderator:
         n = self._warns.get(key, 0) + 1
         self._warns[key] = n
 
-        if n < WARN_LIMIT:
+        # Until the trust list has arrived we do not know who is exempt, and
+        # acting confidently on that ignorance is exactly what removed a trusted
+        # user. Warn, never remove, while we are blind.
+        blind = False
+        try:
+            blind = not self.bridge.trust_loaded()
+        except Exception:                      # noqa: BLE001
+            blind = False
+
+        if n < WARN_LIMIT or blind:
             self.bridge.send_raw(f"MODE {channel} -v {nick}")
             self.bridge._queue(
                 channel,
@@ -222,7 +248,16 @@ class Moderator:
             here = {n.lower() for n in self.bridge.get_channel_nicks(channel)}
         except Exception:
             return True          # unsure: assume covered, stay on the gaps
-        return self._peer.lower() in here
+        if self._peer.lower() in here:
+            return True
+        # By vhost too: the peer rotates its nick now, and deciding it is ABSENT
+        # because the name changed would have Luna quietly take over the whole
+        # job while Dracula was standing right there.
+        try:
+            return any(self.bridge.is_one_of_ours(m) for m in here
+                       if m.lower() != config.IRC_NICK.lower())
+        except Exception:                      # noqa: BLE001
+            return False
 
     def _word_hit(self, text: str) -> Optional[str]:
         """The plain word filter, used ONLY while standing in for the peer."""
@@ -274,7 +309,15 @@ class Moderator:
             return True
 
         # 4. Advertising another server.
-        if _ADVERT.search(text):
+        #
+        # Strip our OWN network's links first. This guard already existed and was
+        # applied to the Discord-side check only — this path, the one that kicks
+        # people out of the room, never got it. On 2026-09-25 that kicked hazel,
+        # seconds after Vikram had protected AND trusted her, for posting an audio
+        # clip through the room's own uploader: "kiwiirc.hybridirc.com" contains
+        # "irc.hybridirc.com", which the pattern reads as an invitation to another
+        # network. Two implementations of one rule, and only one of them fixed.
+        if _ADVERT.search(_strip_home_links(text)):
             self._act(channel, nick, "advertising")
             return True
 

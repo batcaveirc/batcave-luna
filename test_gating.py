@@ -49,6 +49,8 @@ OPEN = {
     "stats":    "counts, nothing identifying",
     "mood":     "reads back the mood she is already showing",
     "seen":     "when somebody was last around",
+    "quote":    "something the room already said, out loud again",
+    "onthisday": "the room's own history, which is not private to mods",
     "irctopic": "read-only, and a channel topic is public by definition",
     "tea":      "social", "confess": "social", "truth": "social", "dare": "social",
     "ship":     "social", "seduce": "social", "tod": "social", "vibe": "social",
