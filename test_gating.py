@@ -126,6 +126,16 @@ c("the role match ignores case",
 c("somebody in a DM, where there are no roles to check, is refused",
   admin_cog._is_mod(ctx_of(object())) is False)
 
+# The workflow passes MOD_ROLE with no fallback, so an unset secret arrives as
+# an empty string — and os.getenv's default does NOT apply to an empty value.
+# config.MOD_ROLE was "", so this check compared role names against "" and the
+# whole MOD_ROLE route was dead while looking perfectly configured.
+c("an unset MOD_ROLE secret still leaves a usable role name",
+  bool(config.MOD_ROLE.strip()), f"MOD_ROLE is {config.MOD_ROLE!r}")
+c("and an empty role name never matches a real role anyway",
+  not admin_cog._is_mod(ctx_of(member(roles=("",)))),
+  "an empty allow-value must never mean 'everyone'")
+
 print("\n— and it says so, rather than failing silently —")
 deco = admin_cog.mod_only()
 target = MagicMock()

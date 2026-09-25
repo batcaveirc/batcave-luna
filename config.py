@@ -96,7 +96,13 @@ IRC_OUR_HOSTS         = [h.strip().lower() for h in os.getenv(
 # Discord channel name for bot-status alerts
 ALERT_CHANNEL         = os.getenv("ALERT_CHANNEL", "bot-logs")
 # Discord role name required to use mod commands (also accepts users with kick/ban perm)
-MOD_ROLE              = os.getenv("MOD_ROLE", "Moderator")
+# `or`, not a getenv default. The workflow passes MOD_ROLE with no fallback, so
+# when the secret is unset the variable EXISTS and is empty — and a getenv
+# default only applies when the name is absent. The result was config.MOD_ROLE
+# == "", so the role check compared every role name against "" and matched
+# nothing: the documented "give someone the Moderator role" route silently did
+# not work at all, and only Discord kick/ban permissions let anyone through.
+MOD_ROLE              = os.getenv("MOD_ROLE") or "Moderator"
 
 # ── Bot identity ──────────────────────────────────────────────────────────────
 # "$" is Luna's alone. "!" is the Vampire bot's and "!!" is Dracula's, so a
