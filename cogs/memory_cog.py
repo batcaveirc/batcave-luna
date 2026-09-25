@@ -99,6 +99,7 @@ class MemoryCog(commands.Cog, name="Memory"):
         as a relayed line.
         """
         out: list[tuple] = []
+        self._denied = []
         for ch in self._relay_channels():
             try:
                 async for m in ch.history(limit=cap, after=since, before=until,
@@ -114,9 +115,21 @@ class MemoryCog(commands.Cog, name="Memory"):
                     out.append((m.created_at, hit.group("room"),
                                 hit.group("nick"), said))
             except discord.Forbidden:
+                # Missing "Read Message History" in this channel. Swallowing it
+                # turns a PERMISSIONS problem into "nothing found", which is the
+                # one answer that stops anybody looking for the cause. Record it
+                # so the caller can say so out loud.
+                self._denied.append(ch.name)
                 continue
         out.sort(key=lambda r: r[0], reverse=True)
         return out
+
+    def _denial_note(self) -> str:
+        denied = getattr(self, "_denied", [])
+        if not denied:
+            return ""
+        return (f" (I cannot read history in #{', #'.join(denied[:3])} — "
+                f"I need Read Message History there)")
 
     async def search(self, needle: str, cap: int = 60) -> list:
         needle = needle.strip().lower()
@@ -208,7 +221,8 @@ class MemoryCog(commands.Cog, name="Memory"):
             return "Give me at least three characters to look for."
         hits = await self.search(needle)
         if not hits:
-            return f'Nothing matching "{needle[:40]}" in the last {_WINDOW_DAYS} days.'
+            return (f'Nothing matching "{needle[:40]}" in the last {_WINDOW_DAYS} days.'
+                    + self._denial_note())
         now = datetime.now(timezone.utc)
         body = " · ".join(
             f"[{_ago((now - at).total_seconds()).strip()}] {nick}: {said[:70]}"
@@ -219,7 +233,7 @@ class MemoryCog(commands.Cog, name="Memory"):
     async def irc_stats(self) -> str:
         total, talkers, hours, rooms = await self.activity()
         if not total:
-            return "No relayed history to count yet."
+            return "No relayed history to count yet." + self._denial_note()
         top = ", ".join(f"{n} ({c})" for n, c in talkers.most_common(5))
         busy = ", ".join(f"{h:02d}:00" for h, _ in hours.most_common(2))
         where = ", ".join(r for r, _ in rooms.most_common(2))

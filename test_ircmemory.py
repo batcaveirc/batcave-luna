@@ -148,5 +148,16 @@ c("a FAILED one says so in the room rather than vanishing",
   any("did not work" in m for _ch, m in b.queued), f"{b.queued}")
 loop.call_soon_threadsafe(loop.stop)
 
+print("\n— a permissions problem does not masquerade as an empty room —")
+import cogs.memory_cog as _mc
+cog = _mc.MemoryCog.__new__(_mc.MemoryCog)
+cog._denied = []
+c("with full access it adds no excuse", cog._denial_note() == "")
+cog._denied = ["batcave"]
+note = cog._denial_note()
+c("without Read Message History it names the channel and the permission",
+  "batcave" in note and "Read Message History" in note,
+  f"{note!r} — otherwise $find answers 'nothing found' and nobody looks at permissions")
+
 print(f"\n{fails} FAILED" if fails else "\nALL PASS")
 sys.exit(1 if fails else 0)
