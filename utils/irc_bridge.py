@@ -56,6 +56,13 @@ _SEND_DELAY          = 0.5   # seconds between outbound IRC messages (rate-limit
 _NICK_RECLAIM_SECS = 60      # how often to check we still hold our own nick
 _MEMORY_COOLDOWN = 8         # seconds between one person's history commands
 _RECENT_LINES = 25           # live tail kept per room for grounding the AI
+# Following the community's rooms. Luna leaves a room herself once it has been
+# quiet this long — but she does NOT rejoin on a timer, because join/part
+# cycling is the exact abuse signature this network kills bots for. Coming back
+# is event-driven: an INVITE, or an op's $follow. Auto-leave is safe; auto-
+# rejoin-on-a-clock is not, and that tension is the owner's own #1 priority
+# ("i dont wanna be banned cause of fast nick changes").
+_FOLLOW_IDLE = max(10, int(os.getenv("FOLLOW_IDLE_MIN", "45"))) * 60
 
 # Dracula keeps the trust list in ChanServ FLAGS on its own channel, and that is
 # the ONLY place it lives. Luna had a separate list in a secret, read once at
@@ -225,6 +232,17 @@ class IRCBridge:
         # summary of the 1872 novella Carmilla. In memory only, tiny, and it
         # is the live tail; the durable record still lives in Discord.
         self._recent: Dict[str, deque] = {}
+        # Room-following. OFF unless IRC_FOLLOW is set: it changes what rooms the
+        # bot sits in, and that should never be a surprise. The follow set is
+        # rooms the OWNER named (config or $follow) — never rooms discovered by
+        # snooping where people are — and within it Luna manages her own
+        # departures when a room goes quiet.
+        self._follow_on = os.getenv("IRC_FOLLOW", "").strip().lower() in ("1", "true", "yes", "on")
+        self._follow: Set[str] = {
+            (c if c.startswith("#") else f"#{c}")
+            for c in os.getenv("IRC_FOLLOW_ROOMS", "").split(",") if c.strip()
+        }
+        self._last_activity: Dict[str, float] = {}   # irc_ch -> ts of last line seen
         self._ai_last_channel = 0.0
         self._connect_time = time.time()
         self._last_tags: Dict[str, str] = {}
@@ -565,6 +583,41 @@ class IRCBridge:
     MEMORY_CMDS = ("find", "search", "tell", "memo", "stats", "activity",
                    "quote", "onthisday", "rewind", "backthen", "seen", "mood")
 
+    def try_follow_command(self, irc_ch: str, nick: str, text: str) -> bool:
+        """$follow / $unfollow / $following — steer which rooms Luna sits in.
+
+        Operators only. Making a bot join arbitrary rooms is a way to point it
+        wherever you like, so this is gated the same way $mod is, and it acts
+        only on rooms the caller names — never on rooms it went looking for.
+        """
+        from shared_cmds import is_irc_owner
+        body = text[len(config.PREFIX):] if text.startswith(config.PREFIX) else ""
+        parts = body.split()
+        if not parts or parts[0].lower() not in ("follow", "unfollow", "following"):
+            return False
+        cmd = parts[0].lower()
+        if not is_irc_owner(nick, self, irc_ch):
+            return True                              # silently ignore non-ops, as $mod does
+        if cmd == "following":
+            rooms = ", ".join(sorted(self._follow)) or "(none)"
+            state = "on" if self._follow_on else "off (IRC_FOLLOW is not set)"
+            self._notice(nick, f"Following [{state}]: {rooms}")
+            return True
+        if len(parts) < 2 or not parts[1].lstrip("#"):
+            self._notice(nick, f"{config.PREFIX}{cmd} #room")
+            return True
+        room = parts[1]
+        if not self._follow_on:
+            self._notice(nick, "Following is off — set IRC_FOLLOW to turn it on.")
+            return True
+        if cmd == "follow":
+            self.follow_add(room)
+            self._notice(nick, f"Following {room if room.startswith('#') else '#' + room}.")
+        else:
+            self.follow_remove(room)
+            self._notice(nick, f"Left {room if room.startswith('#') else '#' + room}.")
+        return True
+
     def try_memory_command(self, irc_ch: str, nick: str, text: str) -> bool:
         """Handle a memory command from IRC. True if we took it."""
         if self.loop is None or not self.loop.is_running():
@@ -850,6 +903,9 @@ class IRCBridge:
                 self._trust_asked = time.time()
                 self._trusted_pending = set()
                 self._raw(f"PRIVMSG ChanServ :FLAGS {TRUST_CHANNEL}")
+            # Leave rooms that have gone quiet. Parts only; never rejoins on a
+            # clock (that is the churn that gets bots killed).
+            self._follow_sweep()
             buf += data
             while "\r\n" in buf:
                 line, buf = buf.split("\r\n", 1)
@@ -874,6 +930,18 @@ class IRCBridge:
         return when < self._connect_time - 5
 
     def _handle_line(self, line: str):
+        # An INVITE is the polite, event-driven way back into a room — the
+        # opposite of clock-driven rejoin churn. Accept it only when following
+        # is on, and only from someone we trust, so the bot cannot be dragged
+        # into a stranger's room as a prank.
+        inv = re.match(r"^:([^!]+)!\S+\s+INVITE\s+\S+\s+:?(#\S+)", line, re.I)
+        if inv and self._follow_on:
+            who, room = inv.group(1), inv.group(2)
+            if self.is_trusted(who) or self.is_one_of_ours(who):
+                print(f"[irc_bridge] {who} invited me to {room} — following.")
+                self.follow_add(room)
+            return
+
         tags: Dict[str, str] = {}
         if line.startswith("@"):
             head, _, line = line.partition(" ")
@@ -974,6 +1042,12 @@ class IRCBridge:
             # Re-join ALL mapped IRC channels
             for ch in self.all_channels():
                 self._raw(f"JOIN {ch}")
+            # And the followed rooms, if following is on. Same JOIN, but tracked
+            # so the idle sweep can later part them.
+            if self._follow_on:
+                for ch in self._follow:
+                    self._raw(f"JOIN {ch}")
+                    self._last_activity[ch.lower()] = time.time()
             self._connected = True
             print(f"[irc_bridge] Connected and joined IRC channels.")
             return
@@ -1188,6 +1262,7 @@ class IRCBridge:
             # question about everyone else.
             buf = self._recent.setdefault(target.lower(), deque(maxlen=_RECENT_LINES))
             buf.append((nick, message[:300]))
+            self._last_activity[target.lower()] = time.time()
 
             # ── A room that is not ours: listen only ──
             # Luna is a guest in the rooms she watches. She never speaks or
@@ -1248,6 +1323,8 @@ class IRCBridge:
                     # relay for everyone in the room. They go to Discord's loop
                     # and the answer arrives through the queue, exactly as $ai
                     # already does.
+                    if self.try_follow_command(target, nick, message):
+                        return
                     if self.try_memory_command(target, nick, message):
                         return
                     try:
@@ -1491,6 +1568,62 @@ class IRCBridge:
             return max(9, int(said) or config.IRC_NICK_MAXLEN)
         except (TypeError, ValueError):
             return config.IRC_NICK_MAXLEN
+
+    def _is_home_room(self, irc_ch: str) -> bool:
+        """A bridged room, or one named at boot. These are the job and are never
+        auto-parted — leaving one silently would take the relay down, which is
+        the kind of quiet failure that goes unnoticed for hours."""
+        c = irc_ch.lower()
+        with self._map_lock:
+            if c in self._i2d:
+                return True
+        boot = {x.strip().lower() if x.strip().startswith("#") else f"#{x.strip().lower()}"
+                for x in os.getenv("IRC_EXTRA_CHANNELS", "").split(",") if x.strip()}
+        return c in boot
+
+    def followed_rooms(self) -> Set[str]:
+        return set(self._follow)
+
+    def follow_add(self, irc_ch: str) -> bool:
+        """Bring a room into the follow set and join it now. Event-driven only —
+        an op's command or an INVITE — never a timer."""
+        ch = irc_ch if irc_ch.startswith("#") else f"#{irc_ch}"
+        self._follow.add(ch)
+        self._last_activity[ch.lower()] = time.time()   # grace period before idle-part
+        if self._connected:
+            self._raw(f"JOIN {ch}")
+        return True
+
+    def follow_remove(self, irc_ch: str) -> bool:
+        ch = irc_ch if irc_ch.startswith("#") else f"#{irc_ch}"
+        self._follow.discard(ch)
+        if self._connected and not self._is_home_room(ch):
+            self._raw(f"PART {ch} :following elsewhere")
+        return True
+
+    def _follow_sweep(self) -> None:
+        """Leave followed rooms that have gone quiet. Home rooms are exempt, and
+        this only ever PARTS — the rejoin is an INVITE or a command, so there is
+        no join/part churn for the network to punish."""
+        if not (self._follow_on and self._connected):
+            return
+        now = time.time()
+        for ch in list(self._follow):
+            c = ch.lower()
+            if self._is_home_room(ch):
+                continue
+            last = self._last_activity.get(c)
+            # Unknown last-activity gets a grace stamp rather than an instant
+            # part: a room we just joined has simply not spoken yet.
+            if last is None:
+                self._last_activity[c] = now
+                continue
+            if now - last > _FOLLOW_IDLE:
+                self._raw(f"PART {ch} :quiet in here — back when there is life")
+                self._follow.discard(ch)
+                self._last_activity.pop(c, None)
+                print(f"[irc_bridge] Left {ch}: no activity for "
+                      f"{int((now - last) / 60)} min.")
 
     def _rotation_allowed(self) -> bool:
         now = time.time()
