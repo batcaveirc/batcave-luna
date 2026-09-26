@@ -163,5 +163,29 @@ c("a non-mod is refused", refused is False)
 c("and is TOLD, not left wondering whether the bot is broken", len(said) == 1,
   "silence here reads as a dead command, and the room reports it as a bug")
 
+print("\n— mod commands are hidden from ordinary users in $help —")
+import shared_cmds
+
+
+class _B:
+    loop = None
+    bot = None
+    def __init__(self, ops): self._ops = {o.lower() for o in ops}
+    def has_prefix(self, ch, n): return n.lower() in self._ops
+
+
+sc = shared_cmds.SharedCommands.get(bot=None, bridge=_B(ops=("vikram",)))
+sc._channel = "#batcave"
+top_user = sc.cmd_help("irc", "randomuser", "")
+c("a normal user's top help shows no mod command names",
+  not any(w in top_user for w in ("irckick", "ircban", "devoice", "{p}op")),
+  "the owner asked that ordinary users not even get to know them")
+c("and does not even point them at $help mod", "help mod" not in top_user)
+c("a normal user asking $help mod is refused",
+  sc.cmd_help("irc", "randomuser", "mod") == "That half is for operators.")
+c("but an operator still sees the mod list",
+  "op" in sc.cmd_help("irc", "vikram", "mod").lower()
+  and "irckick" in sc.cmd_help("irc", "vikram", "mod"))
+
 print(f"\n{fails} FAILED" if fails else "\nALL PASS")
 sys.exit(1 if fails else 0)

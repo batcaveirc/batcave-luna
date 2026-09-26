@@ -87,8 +87,8 @@ jobs:
           # existing _nick_allowed() flood ceiling still applies underneath.
           IRC_NICK_ROTATE: ${{ secrets.IRC_NICK_ROTATE || '' }}
           IRC_NICK_POOL: ${{ secrets.IRC_NICK_POOL || '' }}
-          IRC_NICK_ROTATE_MIN: ${{ secrets.IRC_NICK_ROTATE_MIN || '90' }}
-          IRC_NICK_MAX_PER_HOUR: ${{ secrets.IRC_NICK_MAX_PER_HOUR || '2' }}
+          IRC_NICK_ROTATE_MIN: ${{ secrets.IRC_NICK_ROTATE_MIN || '240' }}
+          IRC_NICK_MAX_PER_HOUR: ${{ secrets.IRC_NICK_MAX_PER_HOUR || '1' }}
           IRC_NICK_MAXLEN: ${{ secrets.IRC_NICK_MAXLEN || '30' }}
           # Vhosts our own bots wear. A vhost belongs to the connection, so this
           # survives a rename where BATBOT_IRC_NICK cannot.

@@ -242,9 +242,12 @@ class SharedCommands:
                 f"{p}calc 5 x 89 · {p}weather [city]"
             )
         if sub in ("mod", "moderation"):
-            # These are the commands the owner asked for and then could not
-            # find: they live in ircmod_cog and were never listed anywhere, so
-            # the only way to know they existed was to have written them.
+            # Operators only. The owner asked that ordinary users neither use the
+            # mod commands nor "get to know them", so a non-op asking for the mod
+            # help is told it is not theirs rather than shown the list. The
+            # commands are already gated for USE; this hides them from view too.
+            if not is_irc_owner(name, self.bridge, self._channel):
+                return "That half is for operators."
             return (
                 f"[\x02Moderation\x02] From Discord, acting on the room you are "
                 f"pointed at ({p}to): "
@@ -296,7 +299,11 @@ class SharedCommands:
             f"Memory: {p}find {p}quote {p}onthisday {p}tell {p}stats · "
             f"Fun: {p}roll {p}flip {p}choose {p}calc {p}weather · "
             f"Bridge: {p}ping {p}nicks {p}say · "
-            f"More: {p}help memory | {p}help fun | {p}help bridge | {p}help mod"
+            # No mod command names here: the top line is what everyone sees, and
+            # ordinary users should not learn the moderation surface from it.
+            # $help mod carries them, and only shows them to operators.
+            f"More: {p}help memory | {p}help fun | {p}help bridge"
+            + (f" | {p}help mod" if is_irc_owner(name, self.bridge, self._channel) else "")
         )
 
 
