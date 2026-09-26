@@ -74,9 +74,10 @@ def irc_commands():
     names = set(re.findall(r'def cmd_(\w+)\(',
                            pathlib.Path('shared_cmds.py').read_text()))
     bridge = pathlib.Path('utils/irc_bridge.py').read_text()
-    block = re.search(r'MEMORY_CMDS = \(([^)]*)\)', bridge)
-    if block:
-        names |= set(re.findall(r'"(\w+)"', block.group(1)))
+    for grp in ('MEMORY_CMDS', 'NSFW_CMDS'):
+        block = re.search(grp + r' = \(([^)]*)\)', bridge)
+        if block:
+            names |= set(re.findall(r'"(\w+)"', block.group(1)))
     # And the third path: a couple are matched straight out of the line handler
     # rather than going through either dispatcher — $ai is one. Missing this made
     # the reachability check below fail on a command that works perfectly well.
@@ -116,7 +117,9 @@ def irc_reachable_help():
 
 def main():
     fails = 0
-    have = registered()
+    # Bridge-handled commands (memory, adult) are real even though they are
+    # not cog @command functions, so they count as existing here.
+    have = registered() | irc_commands()
     paths = (('Discord embed', advertised_discord()), ('IRC help', advertised_irc()))
 
     for label, adv in paths:

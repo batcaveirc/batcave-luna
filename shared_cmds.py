@@ -255,9 +255,20 @@ class SharedCommands:
                 f"{p}mute {p}unmute <nick> · "
                 f"{p}irckick <nick> [reason] · {p}ircban {p}ircunban <nick> · "
                 f"{p}ircwho who is in the room. "
+                f"{p}nsfw on|off — set a room to adult mode (writes the 18+ notice "
+                f"into its topic). "
                 f"Automatic: {p}mod on|off — I cover what Dracula cannot see: "
                 f"disguised text, mass pings, colour flooding, adverts, walls "
                 f"of text, join flooding. Warn first, kick second, never a ban."
+            )
+        if sub in ("nsfw", "adult", "afterdark"):
+            return (
+                f"[\x02Adult\x02] Only in rooms an operator set to adult mode "
+                f"(the topic will say {chr(0x1F51E)}). Opt in: {p}age18 yes then "
+                f"{p}consent on · opt out any time: {p}boundaries. Then: "
+                f"{p}afterdark · {p}tempt {p}spicy {p}fantasy {p}midnight {p}desire "
+                f"<nick> (the nick must have opted in too). Consent both ways, "
+                f"always, and I stop the moment anyone says {p}boundaries."
             )
         if sub in ("memory", "mem", "history"):
             # These read the relayed history, so they are the one thing Luna can
@@ -302,7 +313,7 @@ class SharedCommands:
             # No mod command names here: the top line is what everyone sees, and
             # ordinary users should not learn the moderation surface from it.
             # $help mod carries them, and only shows them to operators.
-            f"More: {p}help memory | {p}help fun | {p}help bridge"
+            f"More: {p}help memory | {p}help fun | {p}help bridge | {p}help nsfw"
             + (f" | {p}help mod" if is_irc_owner(name, self.bridge, self._channel) else "")
         )
 

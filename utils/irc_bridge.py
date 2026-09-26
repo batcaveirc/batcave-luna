@@ -192,6 +192,10 @@ class IRCBridge:
 
         # ── Topic cache ──────────────────────────────────────────────────────
         self._topics: Dict[str, str] = {}
+        from utils.nsfw import Nsfw
+        # Adult mode. A room is adult only when an op turns it on (which writes a
+        # disclosure into the topic); consent is per session. See utils/nsfw.py.
+        self._nsfw = Nsfw(topic_of=self.get_topic)
         self._topics_lock = threading.Lock()
 
         # ── Outbound send queue ──────────────────────────────────────────────
@@ -590,6 +594,65 @@ class IRCBridge:
     # $help did you update it or no".
     MEMORY_CMDS = ("find", "search", "tell", "memo", "stats", "activity",
                    "quote", "onthisday", "rewind", "backthen", "seen", "mood")
+
+    NSFW_CMDS = ("nsfw", "age18", "consent", "boundaries",
+                 "afterdark", "spicy", "tempt", "fantasy", "midnight", "desire")
+
+    def try_nsfw_command(self, irc_ch: str, nick: str, text: str) -> bool:
+        """Adult mode: opt-in, disclosed in the topic, consent on both sides.
+        Only runs in channels; a PM cannot make a room adult."""
+        from shared_cmds import is_irc_owner
+        body = text[len(config.PREFIX):] if text.startswith(config.PREFIX) else ""
+        parts = body.split()
+        if not parts or parts[0].lower() not in self.NSFW_CMDS:
+            return False
+        cmd = parts[0].lower()
+        arg = parts[1].lower() if len(parts) > 1 else ""
+
+        # $nsfw on|off — operators only, and it changes the room's topic, so it
+        # is the most gated of the lot.
+        if cmd == "nsfw":
+            if not is_irc_owner(nick, self, irc_ch):
+                return True                              # silent for non-ops
+            if arg not in ("on", "off"):
+                self._notice(nick, f"{config.PREFIX}nsfw on  ·  {config.PREFIX}nsfw off")
+                return True
+            cur = self.get_topic(irc_ch) or ""
+            if arg == "on":
+                self._raw(f"TOPIC {irc_ch} :{self._nsfw.topic_with_notice(cur)}")
+                self._notice(nick, "Adult mode on — the topic now says so, so everyone "
+                                   "entering is told. Users opt in with $age18 yes / $consent on.")
+            else:
+                self._raw(f"TOPIC {irc_ch} :{self._nsfw.topic_without_notice(cur)}")
+                self._notice(nick, "Adult mode off — disclosure removed from the topic.")
+            return True
+
+        # Per-user opt-in / opt-out.
+        if cmd == "age18":
+            self._nsfw.set_age18(nick, arg in ("yes", "on", "true", "1"))
+            self._notice(nick, f"Noted. {self._nsfw.status(nick)}")
+            return True
+        if cmd == "consent":
+            self._nsfw.set_consent(nick, arg in ("on", "yes", "true", "1"))
+            self._notice(nick, f"Noted. {self._nsfw.status(nick)}")
+            return True
+        if cmd == "boundaries":
+            # A hard, immediate opt-out — the "stop when told" rule as a command.
+            self._nsfw.set_consent(nick, False)
+            self._notice(nick, "Done — you are opted out and I will not involve you. "
+                               "Everyone's boundaries are the rule here, no questions.")
+            return True
+
+        # An action line. The gate lives in nsfw.line(); we only route.
+        target = parts[1] if len(parts) > 1 else ""
+        line, refusal = self._nsfw.line(cmd, irc_ch, nick, target)
+        if refusal:
+            self._notice(nick, refusal)
+        elif line:
+            # Into the room (it is roleplay for the room), subject to the same
+            # mod-only-speech gate as everything else.
+            self._queue(irc_ch, line)
+        return True
 
     def try_follow_command(self, irc_ch: str, nick: str, text: str) -> bool:
         """$follow / $unfollow / $following — steer which rooms Luna sits in.
@@ -1357,6 +1420,8 @@ class IRCBridge:
                     # relay for everyone in the room. They go to Discord's loop
                     # and the answer arrives through the queue, exactly as $ai
                     # already does.
+                    if self.try_nsfw_command(target, nick, message):
+                        return
                     if self.try_follow_command(target, nick, message):
                         return
                     if self.try_memory_command(target, nick, message):
