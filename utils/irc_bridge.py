@@ -31,8 +31,20 @@ _RECONNECT_DELAY_MIN = 15    # initial reconnect delay (seconds)
 _RECONNECT_DELAY_MAX = 120   # cap for exponential backoff
 # When the server will not even let us finish connecting, the address is the
 # problem and no amount of retrying changes it. Wait a long time instead.
-_REFUSED_DELAY = 1800                # 30 minutes between attempts once refused
+# Once we conclude the address is refused we no longer WAIT it out (the address
+# cannot recover for this runner) — we retry a few times quickly to be sure, then
+# EXIT so a fresh runner is drawn. So the "refused" delay is short now, not 30
+# minutes; the old long backoff just kept the bot absent for the whole job.
+_REFUSED_RETRY = 20                  # seconds between confirming retries before we give up
 _REFUSALS_BEFORE_SLOWDOWN = 3        # a couple of flukes are not a block
+# After this many consecutive refusals AT THE DOOR, give up on this IP and EXIT,
+# so the GitHub job ends and the next scheduled run draws a FRESH runner with a
+# fresh address. Sitting here backing off cannot fix an IP block — the address
+# is fixed for the life of the runner — so a bot that only backs off stays
+# absent from the room for the whole job (up to 6 hours) while looking healthy.
+# Dracula already exits on refusal; Luna did not, and that is why she vanished
+# after today's restarts landed on blocked addresses.
+_REFUSALS_BEFORE_EXIT = 5
 
 
 def _refused_at_the_door(exc) -> bool:
@@ -874,6 +886,30 @@ class IRCBridge:
 
     # ── Reconnect loop ────────────────────────────────────────────────────────
 
+    def _note_refusal(self, exc) -> str:
+        """Update the refusal counter and say what to do: 'reset' (a normal drop
+        after a real session), 'slowdown' (back off — could be a blip), or 'exit'
+        (this address is blocked; give up so a fresh runner is drawn).
+
+        Split out of the reconnect loop so the escalation can be tested without
+        opening a socket or killing the process."""
+        if self._ever_registered or not _refused_at_the_door(exc):
+            self._refusals = 0
+            return "reset"
+        self._refusals += 1
+        if self._refusals == _REFUSALS_BEFORE_SLOWDOWN:
+            print("[irc_bridge] The server is closing the connection before "
+                  "registration — it is refusing this ADDRESS, not this bot. "
+                  "Backing off; a fresh runner gets a fresh address.")
+        if self._refusals >= _REFUSALS_BEFORE_EXIT:
+            print(f"[irc_bridge] Refused {self._refusals} times without ever "
+                  "registering — this address is blocked. Exiting so the next "
+                  "run picks up a different one.")
+            return "exit"
+        if self._refusals >= _REFUSALS_BEFORE_SLOWDOWN:
+            return "slowdown"
+        return "reset"
+
     def _run_forever(self):
         delay = _RECONNECT_DELAY_MIN
         while self._running:
@@ -898,20 +934,15 @@ class IRCBridge:
                 # that arrives BEFORE we were ever registered is treated as an
                 # address-level refusal and backed off hard, while a drop after a
                 # real session keeps the fast retry it needs.
-                if not self._ever_registered and _refused_at_the_door(e):
-                    self._refusals += 1
-                    if self._refusals == _REFUSALS_BEFORE_SLOWDOWN:
-                        print(
-                            "[irc_bridge] The server is closing the connection before "
-                            "registration, which means it is refusing this ADDRESS, not "
-                            "this bot — a datacenter range on a blocklist, most likely. "
-                            "Backing off hard: hammering it cannot fix an IP block and "
-                            "looks like an attack. A fresh runner gets a fresh address."
-                        )
-                    if self._refusals >= _REFUSALS_BEFORE_SLOWDOWN:
-                        delay = _REFUSED_DELAY
-                else:
-                    self._refusals = 0
+                action = self._note_refusal(e)
+                if action == "slowdown":
+                    delay = _REFUSED_RETRY
+                elif action == "exit":
+                    # The address is blocked for this runner's whole life, so a
+                    # fresh run with a fresh address is the only cure. Hard exit
+                    # (ends the process and the job) the way Dracula's does.
+                    import os
+                    os._exit(1)
             if not self._running:
                 break
             self._connected = False
@@ -921,7 +952,7 @@ class IRCBridge:
             else:
                 print(f"[irc_bridge] Reconnecting in {delay}s...")
                 time.sleep(delay)
-                delay = min(delay * 2, _REFUSED_DELAY if self._refusals
+                delay = min(delay * 2, _REFUSED_RETRY if self._refusals
                             >= _REFUSALS_BEFORE_SLOWDOWN else _RECONNECT_DELAY_MAX)
 
     def _connect_and_loop(self):

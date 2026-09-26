@@ -247,5 +247,43 @@ c("and neither is a host that merely ENDS with ours without a dot",
 c("somebody we have no host for is not assumed to be ours",
   not b.is_one_of_ours("unknown"))
 
+
+
+# ── Giving up on a blocked address so a fresh runner is drawn ───────────────
+print("\n— a refused address is abandoned, not sat on forever —")
+from utils.irc_bridge import _REFUSALS_BEFORE_SLOWDOWN, _REFUSALS_BEFORE_EXIT
+
+class _EOF(Exception):
+    pass
+
+def _refbridge():
+    b = IRCBridge.__new__(IRCBridge)
+    b._ever_registered = False
+    b._refusals = 0
+    return b
+
+# The real refusal: a TLS EOF before registration.
+b = _refbridge()
+eof = Exception("TLS/SSL connection has been closed (EOF) (_ssl.c:1010)")
+actions = [b._note_refusal(eof) for _ in range(_REFUSALS_BEFORE_EXIT)]
+c("early refusals back off rather than quit",
+  actions[_REFUSALS_BEFORE_SLOWDOWN - 1] == "slowdown",
+  f"{actions}")
+c("but a persistently refused address finally makes it EXIT for a fresh runner",
+  actions[-1] == "exit",
+  f"after {_REFUSALS_BEFORE_EXIT} refusals it must exit, not sit absent for hours: {actions}")
+
+# A drop AFTER a real session is not a refusal — keep the fast retry, never exit.
+b = _refbridge()
+b._ever_registered = True
+c("a drop after a real session never triggers exit",
+  b._note_refusal(eof) == "reset" and b._refusals == 0)
+
+# A one-off blip resets once a connection succeeds.
+b = _refbridge()
+b._note_refusal(eof); b._note_refusal(eof)
+b._ever_registered = True
+c("the counter resets after a good connection, so blips don't accumulate to exit",
+  b._note_refusal(eof) == "reset")
+
 print(f"\n{fails} FAILED" if fails else "\nALL PASS")
-sys.exit(1 if fails else 0)

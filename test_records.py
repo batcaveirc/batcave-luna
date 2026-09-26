@@ -154,12 +154,20 @@ c("and an explicit line ban", refused(Exception("Closing link: Z-lined")))
 c("but an ordinary mid-session drop is NOT",
   not refused(Exception("Ping timeout")) and not refused(Exception("broken pipe")),
   "a session that was working and dropped must keep its fast retry")
-c("the long wait is at least ten minutes",
-  ns2["_REFUSED_DELAY"] >= 600, str(ns2["_REFUSED_DELAY"]))
-c("and a couple of flukes do not trigger it",
+# CHANGED ON PURPOSE. This used to assert a long (>=10min) backoff on a refused
+# address — the old "sit and wait it out" design. That kept Luna absent from the
+# room for the whole job, because a refused address cannot recover for the life
+# of the runner. The design now EXITS after a few quick confirming retries so a
+# fresh runner draws a fresh address (matching Dracula), so the retry is SHORT,
+# not long, and there is an exit threshold.
+c("the confirming retry between refusals is short, not a long wait",
+  ns2["_REFUSED_RETRY"] <= 60, str(ns2["_REFUSED_RETRY"]))
+c("and after a few refusals it gives up so a fresh runner is drawn",
+  2 <= ns2["_REFUSALS_BEFORE_EXIT"] <= 8, str(ns2.get("_REFUSALS_BEFORE_EXIT")))
+c("a couple of flukes do not trigger the slowdown",
   ns2["_REFUSALS_BEFORE_SLOWDOWN"] >= 2, str(ns2["_REFUSALS_BEFORE_SLOWDOWN"]))
-c("it only applies BEFORE we ever registered",
-  "not self._ever_registered and _refused_at_the_door" in bridge_src,
+c("the whole thing only applies BEFORE we ever registered",
+  "self._ever_registered or not _refused_at_the_door" in bridge_src,
   "a drop after a working session is a different fault with a different fix")
 c("registering clears it", "the address is fine" in bridge_src)
 c("and it says so out loud, once",

@@ -4,8 +4,14 @@ on:
   push:
     branches: [ main ]
   schedule:
-    # Every 5 minutes: if the previous run has ended, start a fresh one.
-    - cron: '*/5 * * * *'
+    # Every 15 minutes: if the previous run has ended (timed out, crashed, or
+    # EXITED because its address was refused), start a fresh one — which draws a
+    # new runner with a new address. Was */5; slowed because the bot now exits
+    # on a refused address, so during a sustained block */5 would re-roll every
+    # few minutes and that run-record volume is exactly what got the account
+    # suspended before. 15 minutes recovers reasonably while staying well under
+    # that. The real cure for the refusals is a non-datacenter host, not cron.
+    - cron: '*/15 * * * *'
   workflow_dispatch: {}
 
 # One Luna at a time. cancel-in-progress:false means the 5-minute cron does NOT
