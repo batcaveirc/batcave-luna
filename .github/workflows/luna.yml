@@ -92,7 +92,7 @@ jobs:
           IRC_NICK_MAXLEN: ${{ secrets.IRC_NICK_MAXLEN || '30' }}
           # Vhosts our own bots wear. A vhost belongs to the connection, so this
           # survives a rename where BATBOT_IRC_NICK cannot.
-          IRC_OUR_HOSTS: ${{ secrets.IRC_OUR_HOSTS || 'Sat.Chit.Ananda,Keeping.The.Night.Company' }}
+          IRC_OUR_HOSTS: ${{ secrets.IRC_OUR_HOSTS || 'Sat.Chit.Ananda,Keeping.The.Night.Company,Got.My.Eyes.OnU' }}
           # ── Room following ─────────────────────────────────────────────
           # OFF unless set. When on, Luna sits in IRC_FOLLOW_ROOMS (plus any an
           # op adds with $follow, or she is invited to by a trusted user) and
