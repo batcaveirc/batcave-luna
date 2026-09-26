@@ -195,6 +195,42 @@ c("a name that got us force-renamed is never offered again",
   "Guest rename every hour forever")
 c("and there are still names left to use", len(later) >= 3, f"left with {sorted(later)}")
 
+print("\n— the interval clock only advances on a real rotation —")
+import config as _cfg
+interval = _cfg.IRC_NICK_ROTATE_MIN * 60
+
+b = bridge()
+b._connected = True
+b._last_rotate = 0.0
+# First tick after connect: budget is free, so it fires and the clock advances a
+# full interval — the next rotation is genuinely IRC_NICK_ROTATE_MIN away.
+b._rotate_nick = lambda: (b.sent.append("NICK X") or True)
+b._rotation_tick(now=100000.0)
+c("a successful rotation advances the clock a full interval",
+  abs(b._last_rotate - 100000.0) < 1, f"_last_rotate={b._last_rotate}")
+
+b = bridge()
+b._connected = True
+b._last_rotate = 0.0
+# A FAILED first attempt (budget briefly spent by connect NICKs) must NOT burn
+# the whole interval — otherwise the bot sits on Luna1 for 90 minutes. It should
+# be due again within seconds.
+b._rotate_nick = lambda: False
+b._rotation_tick(now=100000.0)
+due_in = (b._last_rotate + interval) - 100000.0
+c("a FAILED rotation retries within seconds, not a full interval later",
+  0 < due_in <= 30, f"next attempt due in {due_in:.0f}s (interval is {interval}s)")
+c("and it did not send a stray NICK on failure", not b.sent, f"{b.sent}")
+
+b = bridge()
+b._connected = True
+b._last_rotate = 500.0
+# Well inside the interval: it must not rotate at all yet.
+b._rotate_nick = lambda: (b.sent.append("NICK X") or True)
+b._rotation_tick(now=500.0 + interval - 60)
+c("it does not rotate before the interval is up", not b.sent, f"{b.sent}")
+
+print("\n— knowing our own, whatever they are called —")
 print("\n— knowing our own, whatever they are called —")
 b = bridge()
 b._hosts["dracula"] = "bot@Sat.Chit.Ananda"

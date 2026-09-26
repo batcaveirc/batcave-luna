@@ -890,10 +890,7 @@ class IRCBridge:
             # Rotation rides the same loop rather than a separate timer: this
             # runs only while the link is alive, so a dead connection cannot
             # keep renaming into the void.
-            if (self._connected and config.IRC_NICK_ROTATE
-                    and time.time() - self._last_rotate > config.IRC_NICK_ROTATE_MIN * 60):
-                self._last_rotate = time.time()
-                self._rotate_nick()
+            self._rotation_tick()
             # Keep the trust list current. Asked more often until it has ever
             # arrived, because an empty list means nobody is exempt — and being
             # wrong in that direction is what removed a trusted user.
@@ -1699,6 +1696,29 @@ class IRCBridge:
         self._raw(f"NICK {nxt}")
         threading.Timer(30.0, self._clear_pending_rotation, args=(nxt,)).start()
         return True
+
+    def _rotation_tick(self, now: float = None) -> None:
+        """Decide, once per sweep, whether it is time to rotate — and advance the
+        clock only when a rotation actually FIRES.
+
+        The clock used to advance unconditionally, so a first attempt that failed
+        (the flood budget briefly spent by the connect/reclaim NICKs) still burned
+        the whole interval and left the bot on its base nick — Luna1 — for up to
+        90 minutes after every connect. Every reconnect starts as Luna1 by design;
+        this is what decides how long it stays that way, and the answer is "as
+        short as the flood limit allows".
+        """
+        if not (self._connected and config.IRC_NICK_ROTATE):
+            return
+        now = time.time() if now is None else now
+        if now - self._last_rotate <= config.IRC_NICK_ROTATE_MIN * 60:
+            return
+        if self._rotate_nick():
+            self._last_rotate = now
+        else:
+            # Retry on the next sweep, not a full interval later — but not this
+            # same line either, so a spent budget is not hammered.
+            self._last_rotate = now - config.IRC_NICK_ROTATE_MIN * 60 + 20
 
     def _clear_pending_rotation(self, asked_for: str) -> None:
         """A request the server never answered must not block every later one."""
