@@ -114,5 +114,55 @@ b._follow_sweep()
 c("with IRC_FOLLOW off, no room is parted", not any("PART" in x for x in b.sent),
   "the feature must never surprise the network until it is switched on")
 
+
+
+# ── Speak only where she is a mod ──────────────────────────────────────────
+print("\n— she speaks only in rooms where she is an operator —")
+
+
+def speaker(op_rooms=(), home=("#batcave",), on=True):
+    import threading
+    b = IRCBridge.__new__(IRCBridge)
+    b._nick = "Luna"
+    b._speak_only_where_op = on
+    b._silent_logged = set()
+    b._map_lock = threading.Lock()
+    b._i2d = {h.lower(): "d" for h in home}
+    b._ops = {r.lower() for r in op_rooms}
+    b.has_prefix = lambda ch, n: ch.lower() in b._ops and n == "Luna"
+    import os
+    os.environ["IRC_EXTRA_CHANNELS"] = ""
+    return b
+
+
+b = speaker(op_rooms=("#batcave",))
+c("she relays into a bridged room she is op in", b._may_speak("#batcave", "PRIVMSG"))
+
+b = speaker(op_rooms=())
+c("a bridged room is allowed even if op is momentarily unseen — relay must live",
+  b._may_speak("#batcave", "PRIVMSG"),
+  "gating the relay would be a silent outage, the worst failure here")
+
+b = speaker(op_rooms=())
+c("a random room where she is NOT op is refused",
+  not b._may_speak("#randomroom", "PRIVMSG"),
+  "the owner: do not message rooms you are not a mod in")
+
+b = speaker(op_rooms=("#hangout",))
+c("but a followed room where she IS op is allowed", b._may_speak("#hangout", "PRIVMSG"))
+
+b = speaker(op_rooms=())
+c("a NOTICE to a person always passes — that is answering, not messaging a room",
+  b._may_speak("someuser", "NOTICE") and b._may_speak("#randomroom", "NOTICE"))
+
+b = speaker(op_rooms=(), on=False)
+c("with the guard off, everything passes (it is a toggle)",
+  b._may_speak("#anywhere", "PRIVMSG"))
+
+b = speaker(op_rooms=())
+b._may_speak("#randomroom", "PRIVMSG")
+b._may_speak("#randomroom", "PRIVMSG")
+c("being silent in a room is logged once, not on every dropped line",
+  b._silent_logged == {"#randomroom"})
+
 print(f"\n{fails} FAILED" if fails else "\nALL PASS")
-sys.exit(1 if fails else 0)

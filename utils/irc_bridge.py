@@ -243,6 +243,14 @@ class IRCBridge:
             for c in os.getenv("IRC_FOLLOW_ROOMS", "").split(",") if c.strip()
         }
         self._last_activity: Dict[str, float] = {}   # irc_ch -> ts of last line seen
+        # Speak only where she is an operator. The owner: "make sure my bots dont
+        # message anything in other rooms except the rooms they are a mod." ON by
+        # default; bridged/home rooms are always exempt so the relay can never go
+        # silent because of it. In a followed room where she is not opped she
+        # simply listens.
+        self._speak_only_where_op = os.getenv(
+            "IRC_MOD_ONLY_SPEECH", "on").strip().lower() not in ("0", "false", "no", "off")
+        self._silent_logged: Set[str] = set()
         self._ai_last_channel = 0.0
         self._connect_time = time.time()
         self._last_tags: Dict[str, str] = {}
@@ -762,6 +770,33 @@ class IRCBridge:
     def _notice(self, nick: str, text: str) -> None:
         self._queue(nick, text, "NOTICE")
 
+    def _may_speak(self, irc_ch: str, verb: str) -> bool:
+        """Whether we are allowed to put this line in this channel.
+
+        Only gates channel PRIVMSGs. A NOTICE (a reply to one person) and a
+        message to a nick always pass — answering someone who spoke to us is not
+        "messaging a room". Bridged/home rooms always pass, because refusing to
+        relay there would be a silent outage, the worst failure this bridge has.
+        Everywhere else, speak only if we hold ops.
+        """
+        if not self._speak_only_where_op:
+            return True
+        if verb != "PRIVMSG" or not str(irc_ch).startswith("#"):
+            return True
+        if self._is_home_room(irc_ch):
+            return True
+        try:
+            if self.has_prefix(irc_ch, self._nick):
+                return True
+        except Exception:                        # noqa: BLE001
+            return True                          # unknown -> do not gag the bot
+        # Not a mod here. Say so ONCE (a dropped line that logs nothing looks
+        # like the bot is broken), then stay quiet in this room.
+        if irc_ch.lower() not in self._silent_logged:
+            self._silent_logged.add(irc_ch.lower())
+            print(f"[irc_bridge] Not opped in {irc_ch} — listening only (mod-only speech is on).")
+        return False
+
     def _sender_loop(self):
         """Drain the send queue at _SEND_DELAY intervals (rate-limiting)."""
         while self._running:
@@ -772,6 +807,8 @@ class IRCBridge:
                 if not self._send_q:
                     continue
                 irc_ch, text, verb = self._send_q.popleft()
+            if not self._may_speak(irc_ch, verb):
+                continue
             try:
                 self._raw(f"{verb} {irc_ch} :{text}")
             except Exception as e:

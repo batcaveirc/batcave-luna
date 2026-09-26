@@ -100,6 +100,9 @@ jobs:
           # rejoins on a timer — that would be the join/part churn this network
           # kills bots for — so coming back is an invite or a command.
           IRC_FOLLOW: ${{ secrets.IRC_FOLLOW || '' }}
+          # Speak only in rooms where Luna holds ops (bridged rooms always
+          # exempt so the relay cannot go silent). ON by default.
+          IRC_MOD_ONLY_SPEECH: ${{ secrets.IRC_MOD_ONLY_SPEECH || 'on' }}
           IRC_FOLLOW_ROOMS: ${{ secrets.IRC_FOLLOW_ROOMS || '' }}
           FOLLOW_IDLE_MIN: ${{ secrets.FOLLOW_IDLE_MIN || '45' }}
           # The primary room.
