@@ -27,11 +27,6 @@ topics = {}
 n = Nsfw(topic_of=lambda ch: topics.get(ch.lower(), ""))
 
 
-def optin(who):
-    n.set_age18(who, True)
-    n.set_consent(who, True)
-
-
 print("— a room is adult only when its topic says so —")
 c("no topic marker → not adult", not n.room_is_adult("#room"))
 topics["#room"] = TOPIC_MARK + " Adult room, 18+"
@@ -47,39 +42,32 @@ off = n.topic_without_notice(t)
 c("turning off strips the notice but keeps the room's own topic",
   TOPIC_MARK not in off and "welcome to the lounge" in off)
 
-print("\n— nothing happens without opt-in —")
+print("\n— entering the disclosed room is the consent; no opt-in step —")
 line, refusal = n.line("afterdark", "#room", "alice")
-c("a non-opted-in user is refused", not line and "opted in" in refusal)
-optin("alice")
-line, refusal = n.line("afterdark", "#room", "alice")
-c("an opted-in user in an adult room gets a line", bool(line) and not refusal)
+c("anyone in an adult room gets a line, no opt-in required", bool(line) and not refusal)
 
 print("\n— not in a room that is not adult —")
 line, refusal = n.line("afterdark", "#plain", "alice")
-c("even an opted-in user gets nothing in a non-adult room",
-  not line and "operator" in refusal, refusal)
+c("nothing happens in a non-adult room", not line and "operator" in refusal, refusal)
 
-print("\n— a directed line needs the TARGET to have opted in too —")
+print("\n— a directed line works on anyone present, UNLESS they opted out —")
 line, refusal = n.line("tempt", "#room", "alice", "bob")
-c("aiming at someone who has not opted in is refused",
-  not line and "bob" in refusal and "opted in" in refusal,
-  "this is the guardrail the reference bot lacks")
-optin("bob")
+c("aiming at another person in the adult room works", bool(line) and "bob" in line and not refusal)
+n.opt_out("bob")      # $boundaries
 line, refusal = n.line("tempt", "#room", "alice", "bob")
-c("once bob has opted in too, it works", bool(line) and "bob" in line and not refusal)
+c("but $boundaries makes bob off-limits immediately",
+  not line and "bob" in refusal, "stop the moment someone says no — absolute")
+c("someone who opted out cannot use it themselves either",
+  not n.line("afterdark", "#room", "bob")[0])
+n.opt_in("bob")       # $boundaries off
+line, refusal = n.line("tempt", "#room", "alice", "bob")
+c("$boundaries off brings them back", bool(line) and not refusal)
 
-print("\n— self-targeting is fine; opting out is instant —")
+print("\n— self-targeting is fine —")
 line, refusal = n.line("tempt", "#room", "alice", "alice")
 c("aiming at yourself is allowed", bool(line) and not refusal)
-n.set_consent("bob", False)      # $boundaries
-line, refusal = n.line("tempt", "#room", "alice", "bob")
-c("$boundaries opts you out immediately, and others can no longer target you",
-  not line and "bob" in refusal, "stop the moment someone says no")
-c("and a hard opt-out clears the 18+ flag too, so it is a real reset",
-  not n.opted_in("bob"))
 
 print("\n— the manager never produces explicit content —")
-optin("carol"); optin("dave")
 sample = " ".join(n.line(k, "#room", "carol", "dave")[0] for k in
                    ("spicy", "tempt", "fantasy", "midnight", "desire") for _ in range(5))
 banned = ["fuck", "cock", "pussy", "cum", "naked", "sex"]
@@ -118,11 +106,16 @@ c("an op turns it on and the topic gets the 18+ notice",
 b = bridge(ops=("vikram",))
 # opt in, adult room via topic, then an action goes to the room
 b._topics["#room"] = TOPIC_MARK + " adult"
-b.try_nsfw_command("#room", "alice", f"{P}age18 yes")
-b.try_nsfw_command("#room", "alice", f"{P}consent on")
 b.try_nsfw_command("#room", "alice", f"{P}afterdark")
-c("an opted-in user's afterdark reaches the room",
+c("anyone in the adult room can use afterdark (no opt-in step)",
   any(x.startswith("MSG #room") for x in b.sent), f"{b.sent}")
+b2 = bridge(ops=("vikram",)); b2._topics["#room"] = TOPIC_MARK + " adult"
+b2.try_nsfw_command("#room", "bob", f"{P}boundaries")
+b2.try_nsfw_command("#room", "alice", f"{P}tempt bob")
+c("but someone who typed $boundaries is not targeted",
+  not any(x.startswith("MSG #room") for x in b2.sent if "tempt" not in x.lower()) or
+  all("bob" not in x for x in b2.sent if x.startswith("MSG #room")),
+  f"{b2.sent}")
 
 print(f"\n{fails} FAILED" if fails else "\nALL PASS")
 sys.exit(1 if fails else 0)

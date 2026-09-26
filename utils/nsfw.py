@@ -38,8 +38,9 @@ import random
 TOPIC_MARK = "🔞"
 TOPIC_NOTICE = (
     f"{TOPIC_MARK} Adult/NSFW room — by staying you confirm you are 18+ and "
-    f"consent to adult content. Not for you? You are free to leave. "
-    f"Rules: consent always, no harassment, no minors, stop when told."
+    f"consent to adult content. Not for you? You are free to leave. Don't want "
+    f"to be roleplayed at? Type $boundaries. Rules: no harassment, no minors, "
+    f"stop when told."
 )
 
 RULES = ("Adults only, consent required, no coercion, no harassment, no minors, "
@@ -99,10 +100,13 @@ class Nsfw:
         # be read from the live topic rather than a file that would not survive
         # a restart. Injected so the manager is testable without a socket.
         self._topic_of = topic_of or (lambda ch: "")
-        # Consent is per session, on purpose: it resets on reconnect, so nobody
-        # is opted in "forever" by something they typed weeks ago.
-        self._age18: set[str] = set()
-        self._consent: set[str] = set()
+        # No opt-IN step: the room's topic discloses it and entering is the
+        # agreement — the owner's call for his own adult rooms, and reasonable
+        # when the disclosure is unmissable. What remains is the opt-OUT, which
+        # is the "stop when someone says no" rule and is NOT negotiable: anyone
+        # can say $boundaries and the bot will not aim anything at them. Per
+        # session, so it resets clean on reconnect.
+        self._opted_out: set[str] = set()
 
     # ── room state, read from the topic ──────────────────────────────────────
     def room_is_adult(self, channel: str) -> bool:
@@ -127,23 +131,16 @@ class Nsfw:
         kept = [p for p in parts if TOPIC_MARK not in p]
         return "  |  ".join(kept).strip()
 
-    # ── per-user opt-in ──────────────────────────────────────────────────────
-    def set_age18(self, nick: str, yes: bool):
-        (self._age18.add if yes else self._age18.discard)(_norm(nick))
+    # ── the one control that stays: opting OUT ───────────────────────────────
+    def opt_out(self, nick: str):
+        self._opted_out.add(_norm(nick))
 
-    def set_consent(self, nick: str, yes: bool):
-        (self._consent.add if yes else self._consent.discard)(_norm(nick))
-        if not yes:
-            self._age18.discard(_norm(nick))             # a hard opt-out clears both
+    def opt_in(self, nick: str):
+        # "$boundaries off" — change your mind and rejoin the fun.
+        self._opted_out.discard(_norm(nick))
 
-    def opted_in(self, nick: str) -> bool:
-        n = _norm(nick)
-        return n in self._age18 and n in self._consent
-
-    def status(self, nick: str) -> str:
-        n = _norm(nick)
-        return (f"18+: {'yes' if n in self._age18 else 'no'}, "
-                f"consent: {'on' if n in self._consent else 'off'}")
+    def is_opted_out(self, nick: str) -> bool:
+        return _norm(nick) in self._opted_out
 
     # ── producing a line, only when everyone involved agreed ─────────────────
     def line(self, kind: str, channel: str, sender: str, target: str = ""):
@@ -154,8 +151,8 @@ class Nsfw:
         """
         if not self.room_is_adult(channel):
             return "", "not here — this only works in a room an operator has set to adult mode."
-        if not self.opted_in(sender):
-            return "", "you have not opted in — say '$age18 yes' then '$consent on' first."
+        if self.is_opted_out(sender):
+            return "", "you opted out with $boundaries — $boundaries off to rejoin."
         kind = _norm(kind)
         if kind == "afterdark":
             return random.choice(AFTERDARK), ""
@@ -166,8 +163,8 @@ class Nsfw:
             return "", "at whom? (give a nick)"
         if _norm(target) == _norm(sender):
             return random.choice(bank).format(a=sender, b=sender), ""
-        # The guardrail Vampire lacks: the person on the receiving end must have
-        # opted in too. No aiming a sexual line at someone who never agreed.
-        if not self.opted_in(target):
-            return "", f"{target} has not opted into adult mode, so I won't aim that at them."
+        # The one hard guardrail: someone who said $boundaries is off-limits as a
+        # target, no matter that the room is adult. "Stop when told" is absolute.
+        if self.is_opted_out(target):
+            return "", f"{target} has asked not to be involved, so I won't aim that at them."
         return random.choice(bank).format(a=sender, b=target), ""

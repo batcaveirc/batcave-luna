@@ -264,11 +264,10 @@ class SharedCommands:
         if sub in ("nsfw", "adult", "afterdark"):
             return (
                 f"[\x02Adult\x02] Only in rooms an operator set to adult mode "
-                f"(the topic will say {chr(0x1F51E)}). Opt in: {p}age18 yes then "
-                f"{p}consent on · opt out any time: {p}boundaries. Then: "
-                f"{p}afterdark · {p}tempt {p}spicy {p}fantasy {p}midnight {p}desire "
-                f"<nick> (the nick must have opted in too). Consent both ways, "
-                f"always, and I stop the moment anyone says {p}boundaries."
+                f"(the topic will say {chr(0x1F51E)}, and being in the room is your "
+                f"agreement). {p}afterdark · {p}tempt {p}spicy {p}fantasy "
+                f"{p}midnight {p}desire <nick>. Don't want to be involved? "
+                f"{p}boundaries and I leave you out — {p}boundaries off to rejoin."
             )
         if sub in ("memory", "mem", "history"):
             # These read the relayed history, so they are the one thing Luna can

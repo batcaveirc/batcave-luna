@@ -595,7 +595,7 @@ class IRCBridge:
     MEMORY_CMDS = ("find", "search", "tell", "memo", "stats", "activity",
                    "quote", "onthisday", "rewind", "backthen", "seen", "mood")
 
-    NSFW_CMDS = ("nsfw", "age18", "consent", "boundaries",
+    NSFW_CMDS = ("nsfw", "boundaries",
                  "afterdark", "spicy", "tempt", "fantasy", "midnight", "desire")
 
     def try_nsfw_command(self, irc_ch: str, nick: str, text: str) -> bool:
@@ -627,20 +627,15 @@ class IRCBridge:
                 self._notice(nick, "Adult mode off — disclosure removed from the topic.")
             return True
 
-        # Per-user opt-in / opt-out.
-        if cmd == "age18":
-            self._nsfw.set_age18(nick, arg in ("yes", "on", "true", "1"))
-            self._notice(nick, f"Noted. {self._nsfw.status(nick)}")
-            return True
-        if cmd == "consent":
-            self._nsfw.set_consent(nick, arg in ("on", "yes", "true", "1"))
-            self._notice(nick, f"Noted. {self._nsfw.status(nick)}")
-            return True
+        # The opt-OUT. Entering the disclosed room is the agreement, so there is
+        # no opt-in step; this is the "leave me out" that always works.
         if cmd == "boundaries":
-            # A hard, immediate opt-out — the "stop when told" rule as a command.
-            self._nsfw.set_consent(nick, False)
-            self._notice(nick, "Done — you are opted out and I will not involve you. "
-                               "Everyone's boundaries are the rule here, no questions.")
+            if arg in ("off", "back", "on"):
+                self._nsfw.opt_in(nick)
+                self._notice(nick, "Welcome back — you can be involved again.")
+            else:
+                self._nsfw.opt_out(nick)
+                self._notice(nick, "Done — I won't involve you. $boundaries off to change your mind.")
             return True
 
         # An action line. The gate lives in nsfw.line(); we only route.
