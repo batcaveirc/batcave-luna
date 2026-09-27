@@ -74,7 +74,7 @@ def irc_commands():
     names = set(re.findall(r'def cmd_(\w+)\(',
                            pathlib.Path('shared_cmds.py').read_text()))
     bridge = pathlib.Path('utils/irc_bridge.py').read_text()
-    for grp in ('MEMORY_CMDS', 'NSFW_CMDS', 'TRIVIA_CMDS'):
+    for grp in ('MEMORY_CMDS', 'NSFW_CMDS', 'TRIVIA_CMDS', 'FOLLOW_CMDS'):
         block = re.search(grp + r' = \(([^)]*)\)', bridge)
         if block:
             names |= set(re.findall(r'"(\w+)"', block.group(1)))
@@ -97,6 +97,9 @@ HIDDEN = {
     'about':     'a vanity blurb, not something anyone needs told about',
     'batstatus': 'operational internals, and now mod-only',
     's':         'the shared group prefix, reached through its subcommands',
+    'unfollow':  'variant of $part, which is advertised',
+    'leave':     'variant of $part, which is advertised',
+    'following': 'the status read-out for $follow, which is advertised',
 }
 
 

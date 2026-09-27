@@ -751,6 +751,8 @@ class IRCBridge:
             self._queue(irc_ch, line)
         return True
 
+    FOLLOW_CMDS = ("follow", "unfollow", "following", "part", "leave")
+
     def try_follow_command(self, irc_ch: str, nick: str, text: str) -> bool:
         """$follow / $unfollow / $following — steer which rooms Luna sits in.
 
@@ -761,7 +763,7 @@ class IRCBridge:
         from shared_cmds import is_irc_owner
         body = text[len(config.PREFIX):] if text.startswith(config.PREFIX) else ""
         parts = body.split()
-        if not parts or parts[0].lower() not in ("follow", "unfollow", "following", "part", "leave"):
+        if not parts or parts[0].lower() not in self.FOLLOW_CMDS:
             return False
         cmd = parts[0].lower()
         if not is_irc_owner(nick, self, irc_ch):

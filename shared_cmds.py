@@ -256,6 +256,8 @@ class SharedCommands:
                 f"{p}ircwho who is in the room. "
                 f"{p}nsfw on|off — set a room to adult mode (writes the 18+ notice "
                 f"into its topic). "
+                f"Rooms: {p}follow #room — sit in it (leaves on its own when quiet); "
+                f"{p}part #room — leave now (any room but a bridged one). "
                 f"Automatic: {p}mod on|off — I cover what Dracula cannot see: "
                 f"disguised text, mass pings, colour flooding, adverts, walls "
                 f"of text, join flooding. Warn first, kick second, never a ban."
