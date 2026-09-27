@@ -109,6 +109,11 @@ jobs:
           # Speak only in rooms where Luna holds ops (bridged rooms always
           # exempt so the relay cannot go silent). ON by default.
           IRC_MOD_ONLY_SPEECH: ${{ secrets.IRC_MOD_ONLY_SPEECH || 'on' }}
+          # Rooms that are ADULT by default — the adult commands work there with
+          # no $nsfw on, and Luna writes the 18+ disclosure into their topic on
+          # join. For the owner's own adult rooms, so they "just work". Comma
+          # separated, e.g. "#batcave-nsfw,#afterdark".
+          IRC_NSFW_ROOMS: ${{ secrets.IRC_NSFW_ROOMS || '' }}
           IRC_FOLLOW_ROOMS: ${{ secrets.IRC_FOLLOW_ROOMS || '' }}
           FOLLOW_IDLE_MIN: ${{ secrets.FOLLOW_IDLE_MIN || '45' }}
           # The primary room.

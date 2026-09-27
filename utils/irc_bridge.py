@@ -207,7 +207,14 @@ class IRCBridge:
         from utils.nsfw import Nsfw
         # Adult mode. A room is adult only when an op turns it on (which writes a
         # disclosure into the topic); consent is per session. See utils/nsfw.py.
-        self._nsfw = Nsfw(topic_of=self.get_topic)
+        from utils.trivia import Trivia
+        self._trivia = Trivia()
+        self._trivia_channel = ""
+        self._trivia_timer = None
+        import os as _os
+        self._nsfw = Nsfw(topic_of=self.get_topic,
+                          adult_rooms=[r.strip() for r in
+                                       _os.getenv("IRC_NSFW_ROOMS", "").split(",") if r.strip()])
         self._topics_lock = threading.Lock()
 
         # ── Outbound send queue ──────────────────────────────────────────────
@@ -609,6 +616,89 @@ class IRCBridge:
 
     NSFW_CMDS = ("nsfw", "boundaries",
                  "afterdark", "spicy", "tempt", "fantasy", "midnight", "desire")
+
+    _TRIVIA_REVEAL = 30      # seconds to answer before the answer is shown
+    _TRIVIA_GAP = 4          # pause between questions in a running session
+
+    def _trivia_cancel_timer(self):
+        t = self._trivia_timer
+        if t is not None:
+            try:
+                t.cancel()
+            except Exception:      # noqa: BLE001
+                pass
+            self._trivia_timer = None
+
+    def _trivia_ask(self, irc_ch: str, question: str):
+        self._trivia_cancel_timer()
+        self._queue(irc_ch, f"\x02Trivia:\x03 {question}")
+        self._trivia_timer = threading.Timer(self._TRIVIA_REVEAL, self._trivia_reveal, args=(irc_ch,))
+        self._trivia_timer.daemon = True
+        self._trivia_timer.start()
+
+    def _trivia_reveal(self, irc_ch: str):
+        """Nobody answered in time: show the answer, then move on (or stop)."""
+        if not self._trivia.question():
+            return
+        self._queue(irc_ch, f"Time! The answer was \x02{self._trivia.answer_text()}\x02.")
+        if self._trivia.running:
+            self._trivia_timer = threading.Timer(
+                self._TRIVIA_GAP, lambda: self._trivia_ask(irc_ch, self._trivia.next_question()))
+            self._trivia_timer.daemon = True
+            self._trivia_timer.start()
+        else:
+            self._trivia_channel = ""
+
+    def check_trivia_answer(self, irc_ch: str, nick: str, message: str):
+        """Called for every room line while trivia is live in this channel."""
+        if not self._trivia_channel or irc_ch.lower() != self._trivia_channel.lower():
+            return
+        winner = self._trivia.check(nick, message)
+        if not winner:
+            return
+        self._trivia_cancel_timer()
+        self._queue(irc_ch, f"\x02{winner}\x03 got it — {self._trivia.answer_text()}! "
+                    + (f"({self._trivia.scores.get(winner)} this round)"
+                       if self._trivia.running else ""))
+        if self._trivia.running:
+            self._trivia_timer = threading.Timer(
+                self._TRIVIA_GAP, lambda: self._trivia_ask(irc_ch, self._trivia.next_question()))
+            self._trivia_timer.daemon = True
+            self._trivia_timer.start()
+        else:
+            self._trivia_channel = ""
+
+    TRIVIA_CMDS = ("trivia",)
+
+    def try_trivia_command(self, irc_ch: str, nick: str, text: str) -> bool:
+        from shared_cmds import is_irc_owner
+        body = text[len(config.PREFIX):] if text.startswith(config.PREFIX) else ""
+        parts = body.split()
+        if not parts or parts[0].lower() not in self.TRIVIA_CMDS:
+            return False
+        arg = parts[1].lower() if len(parts) > 1 else ""
+        # on/off run a whole session and are operator-only (they make the bot
+        # talk repeatedly); a bare $trivia is one question anyone may ask.
+        if arg in ("on", "start", "off", "stop"):
+            if not is_irc_owner(nick, self, irc_ch):
+                self._notice(nick, "Starting or stopping a trivia session is for operators.")
+                return True
+            if arg in ("on", "start"):
+                self._trivia_channel = irc_ch
+                self._trivia_ask(irc_ch, self._trivia.start())
+            else:
+                self._trivia_cancel_timer()
+                msg = self._trivia.stop()
+                self._trivia_channel = ""
+                self._queue(irc_ch, msg)
+            return True
+        # bare $trivia — one question, no session, no leaderboard
+        if self._trivia.running:
+            self._notice(nick, "A trivia session is already running here — just answer.")
+            return True
+        self._trivia_channel = irc_ch
+        self._trivia_ask(irc_ch, self._trivia.one_off())
+        return True
 
     def try_nsfw_command(self, irc_ch: str, nick: str, text: str) -> bool:
         """Adult mode: opt-in, disclosed in the topic, consent on both sides.
@@ -1171,6 +1261,19 @@ class IRCBridge:
                 for ch in self._follow:
                     self._raw(f"JOIN {ch}")
                     self._last_activity[ch.lower()] = time.time()
+            # Disclose the owner's declared-adult rooms in their topic, so
+            # "entering is the agreement" still holds even though no one ran
+            # $nsfw on. Best-effort and delayed so ChanServ autoop lands first;
+            # topic_with_notice() keeps whatever the topic already said and does
+            # nothing if the marker is already there.
+            for ch in self.all_channels():
+                if self._nsfw.is_declared_adult(ch):
+                    def _disclose(c=ch):
+                        cur = self.get_topic(c) or ""
+                        from utils.nsfw import TOPIC_MARK
+                        if TOPIC_MARK not in cur:
+                            self._raw(f"TOPIC {c} :{self._nsfw.topic_with_notice(cur)}")
+                    threading.Timer(6.0, _disclose).start()
             self._connected = True
             print(f"[irc_bridge] Connected and joined IRC channels.")
             return
@@ -1386,6 +1489,9 @@ class IRCBridge:
             buf = self._recent.setdefault(target.lower(), deque(maxlen=_RECENT_LINES))
             buf.append((nick, message[:300]))
             self._last_activity[target.lower()] = time.time()
+            # A live trivia line? Check it before anything else consumes the msg.
+            if self._trivia_channel and not message.startswith(config.PREFIX):
+                self.check_trivia_answer(target, nick, message)
 
             # ── A room that is not ours: listen only ──
             # Luna is a guest in the rooms she watches. She never speaks or
@@ -1446,6 +1552,8 @@ class IRCBridge:
                     # relay for everyone in the room. They go to Discord's loop
                     # and the answer arrives through the queue, exactly as $ai
                     # already does.
+                    if self.try_trivia_command(target, nick, message):
+                        return
                     if self.try_nsfw_command(target, nick, message):
                         return
                     if self.try_follow_command(target, nick, message):

@@ -74,7 +74,7 @@ def irc_commands():
     names = set(re.findall(r'def cmd_(\w+)\(',
                            pathlib.Path('shared_cmds.py').read_text()))
     bridge = pathlib.Path('utils/irc_bridge.py').read_text()
-    for grp in ('MEMORY_CMDS', 'NSFW_CMDS'):
+    for grp in ('MEMORY_CMDS', 'NSFW_CMDS', 'TRIVIA_CMDS'):
         block = re.search(grp + r' = \(([^)]*)\)', bridge)
         if block:
             names |= set(re.findall(r'"(\w+)"', block.group(1)))

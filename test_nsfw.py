@@ -32,6 +32,17 @@ c("no topic marker → not adult", not n.room_is_adult("#room"))
 topics["#room"] = TOPIC_MARK + " Adult room, 18+"
 c("topic with the marker → adult", n.room_is_adult("#room"))
 
+print("\n— the owner's declared rooms are adult with no toggle —")
+n2 = Nsfw(topic_of=lambda ch: "", adult_rooms=["#afterdark", "batcave-nsfw"])
+c("a declared room is adult even with no topic marker", n2.room_is_adult("#afterdark"))
+c("declared works with or without the leading #", n2.room_is_adult("#batcave-nsfw"))
+c("and the bridge is told to disclose it in the topic", n2.is_declared_adult("#afterdark"))
+line, refusal = n2.line("fantasy", "#afterdark", "vikram", "vikram")
+c("so $fantasy works there with no $nsfw on", bool(line) and not refusal,
+  "this is the exact case the owner hit: it should just work in their rooms")
+c("an undeclared, unmarked room is still not adult", not n2.room_is_adult("#random"))
+
+print("\n— the topic disclosure is written and removed cleanly —")
 print("\n— the topic disclosure is written and removed cleanly —")
 t = n.topic_with_notice("welcome to the lounge")
 c("turning on prepends the 18+ notice and keeps the old topic",

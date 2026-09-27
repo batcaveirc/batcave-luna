@@ -239,7 +239,8 @@ class SharedCommands:
         if sub in ("fun", "games"):
             return (
                 f"[\x02Fun\x02] {p}roll [NdN] · {p}flip · {p}choose a, b, c · "
-                f"{p}calc 5 x 89 · {p}weather [city]"
+                f"{p}calc 5 x 89 · {p}weather [city] · {p}trivia (one question; "
+                f"operators can run {p}trivia on for a whole round)"
             )
         if sub in ("mod", "moderation"):
             # Operators only. The owner asked that ordinary users neither use the

@@ -95,11 +95,17 @@ def _norm(s: str) -> str:
 class Nsfw:
     """Room adult-state (via topic) and per-session consent (in memory)."""
 
-    def __init__(self, topic_of=None):
+    def __init__(self, topic_of=None, adult_rooms=None):
         # topic_of(channel) -> current topic string, so a room's adult state can
         # be read from the live topic rather than a file that would not survive
         # a restart. Injected so the manager is testable without a socket.
         self._topic_of = topic_of or (lambda ch: "")
+        # Rooms the OWNER has declared adult in config (IRC_NSFW_ROOMS). These
+        # are adult WITHOUT anyone running $nsfw on — the owner runs adult rooms
+        # and asked that they "just work" there. The topic is still set to
+        # disclose it (the bridge does that on join), so entering is still the
+        # agreement; this only removes the per-room toggle for known rooms.
+        self._adult_rooms = {(_norm(r)) for r in (adult_rooms or []) if r}
         # No opt-IN step: the room's topic discloses it and entering is the
         # agreement — the owner's call for his own adult rooms, and reasonable
         # when the disclosure is unmissable. What remains is the opt-OUT, which
@@ -110,7 +116,20 @@ class Nsfw:
 
     # ── room state, read from the topic ──────────────────────────────────────
     def room_is_adult(self, channel: str) -> bool:
+        # Adult if the owner pre-declared it, OR the topic carries the marker
+        # (from $nsfw on). Either way the topic ends up disclosing it.
+        c = _norm(channel)
+        if c in self._adult_rooms or (c.startswith("#") and c.lstrip("#") in
+                                      {r.lstrip("#") for r in self._adult_rooms}):
+            return True
         return TOPIC_MARK in (self._topic_of(channel) or "")
+
+    def is_declared_adult(self, channel: str) -> bool:
+        """Pre-declared in config (as opposed to toggled on) — the bridge uses
+        this to know it should write the disclosure into the topic on join."""
+        c = _norm(channel)
+        return c in self._adult_rooms or (c.startswith("#") and c.lstrip("#") in
+                                          {r.lstrip("#") for r in self._adult_rooms})
 
     def topic_with_notice(self, existing: str) -> str:
         """The topic to SET when turning adult mode on: the disclosure, plus
