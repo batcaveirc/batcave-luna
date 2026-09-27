@@ -99,7 +99,13 @@ HIDDEN = {
     's':         'the shared group prefix, reached through its subcommands',
     'unfollow':  'variant of $part, which is advertised',
     'leave':     'variant of $part, which is advertised',
-    'following': 'the status read-out for $follow, which is advertised',
+    'following': 'the status read-out for $follow',
+    'follow':    'feature is off (IRC_FOLLOW=0); $part is the kept half',
+    # Action verbs — all listed together in the fun line as 'hug|pat|slap|bite|poke|highfive|cheer <nick>'; $hug is the one the
+    # {p}-regex catches, the siblings are the same family.
+    'pat': 'action verb, shown with $hug', 'slap': 'action verb, shown with $hug',
+    'bite': 'action verb, shown with $hug', 'poke': 'action verb, shown with $hug',
+    'highfive': 'action verb, shown with $hug', 'cheer': 'action verb, shown with $hug',
 }
 
 

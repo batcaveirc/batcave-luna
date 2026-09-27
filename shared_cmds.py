@@ -237,8 +237,9 @@ class SharedCommands:
         if sub in ("fun", "games"):
             return (
                 f"[\x02Fun\x02] {p}roll [NdN] · {p}flip · {p}choose a, b, c · "
-                f"{p}calc 5 x 89 · {p}weather [city] · {p}trivia (one question; "
-                f"operators can run {p}trivia on for a whole round)"
+                f"{p}calc 5 x 89 · {p}weather [city] · {p}8ball · {p}dadjoke · "
+                f"{p}fact · {p}icebreaker · {p}hug|pat|slap|bite|poke|highfive|cheer "
+                f"<nick> · {p}trivia (one question; ops can run {p}trivia on)"
             )
         if sub in ("mod", "moderation"):
             # Operators only. The owner asked that ordinary users neither use the
@@ -256,8 +257,7 @@ class SharedCommands:
                 f"{p}ircwho who is in the room. "
                 f"{p}nsfw on|off — set a room to adult mode (writes the 18+ notice "
                 f"into its topic). "
-                f"Rooms: {p}follow #room — sit in it (leaves on its own when quiet); "
-                f"{p}part #room — leave now (any room but a bridged one). "
+                f"Rooms: {p}part #room — leave a room now (any but a bridged one). "
                 f"Automatic: {p}mod on|off — I cover what Dracula cannot see: "
                 f"disguised text, mass pings, colour flooding, adverts, walls "
                 f"of text, join flooding. Warn first, kick second, never a ban."
@@ -359,6 +359,37 @@ class SharedCommands:
                 return r.read().decode("utf-8").strip()
         except Exception as e:
             return f"Weather error: {e}"
+
+    # ── canned fun (stateless; see utils/fun.py) ────────────────────────────
+    def cmd_8ball(self, platform, name, args):
+        from utils import fun
+        q = (args or "").strip()
+        return (f"🎱 {fun.eightball()}" if q else "Ask the 8ball a yes/no question.")
+
+    def cmd_dadjoke(self, platform, name, args):
+        from utils import fun
+        return fun.dadjoke()
+
+    def cmd_fact(self, platform, name, args):
+        from utils import fun
+        return f"Did you know: {fun.fact()}"
+
+    def cmd_icebreaker(self, platform, name, args):
+        from utils import fun
+        return fun.icebreaker()
+
+    def _action(self, verb, name, args):
+        from utils import fun
+        target = (args or "").split()[0] if (args or "").strip() else ""
+        return fun.action(verb, name, target)
+
+    def cmd_hug(self, platform, name, args):      return self._action("hug", name, args)
+    def cmd_pat(self, platform, name, args):      return self._action("pat", name, args)
+    def cmd_slap(self, platform, name, args):     return self._action("slap", name, args)
+    def cmd_bite(self, platform, name, args):     return self._action("bite", name, args)
+    def cmd_highfive(self, platform, name, args): return self._action("highfive", name, args)
+    def cmd_poke(self, platform, name, args):     return self._action("poke", name, args)
+    def cmd_cheer(self, platform, name, args):    return self._action("cheer", name, args)
 
     def cmd_nicks(self, platform, name, args):
         if not self.bridge:
