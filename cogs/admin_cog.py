@@ -174,28 +174,6 @@ class AdminCog(commands.Cog, name="Admin"):
 
 
 
-    @commands.command(name="ircnicks", aliases=["who"])
-    @mod_only()
-    async def irc_nicks(self, ctx: commands.Context, irc_channel: str = ""):
-        """Show who's currently in an IRC channel (defaults to mapped channel)."""
-        if not self._bridge:
-            await ctx.send("❌ IRC bridge not running.")
-            return
-        ch    = irc_channel or self._bridge.get_irc_for_discord(ctx.channel.name) or config.IRC_CHANNEL
-        nicks = self._bridge.get_channel_nicks(ch)
-        if not nicks:
-            await ctx.send(f"🌑 No one tracked in **{ch}** yet.")
-            return
-        nick_list = " • ".join(sorted(nicks, key=str.lower))
-        em = discord.Embed(
-            title       = f"👥 IRC {ch} — {len(nicks)} soul(s)",
-            description = nick_list,
-            color       = config.BOT_COLOR,
-        )
-        await ctx.send(embed=em)
-
-    # ── IRC bridge management ─────────────────────────────────────────────────
-
     @commands.command(name="ircjoin")
     @mod_only()
     async def irc_join(self, ctx: commands.Context, irc_channel: str,
@@ -225,40 +203,6 @@ class AdminCog(commands.Cog, name="Admin"):
             return
         self._bridge.leave_channel(irc_channel)
         await ctx.send(f"🚪 Bridge removed: Luna has left **{irc_channel}**.")
-
-    @commands.command(name="ircbridges", aliases=["relay", "bridges"])
-    @mod_only()
-    async def irc_bridges(self, ctx: commands.Context):
-        """List all active Discord↔IRC bridge mappings."""
-        if not self._bridge:
-            await ctx.send("❌ IRC bridge not running.")
-            return
-        pairs = self._bridge.list_bridges()
-        if not pairs:
-            await ctx.send("🌑 No active bridges.")
-            return
-        lines = [f"• **#{d}** ↔ **{i}**" for d, i in sorted(pairs)]
-        em = discord.Embed(
-            title       = "🌉 Active IRC Bridges",
-            description = "\n".join(lines),
-            color       = config.BOT_COLOR,
-        )
-        await ctx.send(embed=em)
-
-    @commands.command(name="ircping")
-    @mod_only()
-    async def irc_ping(self, ctx: commands.Context):
-        """Check IRC connection status."""
-        if not self._bridge:
-            await ctx.send("❌ IRC bridge not running.")
-            return
-        if self._bridge.is_connected():
-            latency_ms = round(self.bot.latency * 1000)
-            await ctx.send(
-                f"🟢 IRC connected | Discord latency: **{latency_ms}ms**"
-            )
-        else:
-            await ctx.send(f"🔴 Not connected to IRC. Try `{config.PREFIX}ircreconnect`.")
 
     @commands.command(name="ircinfo")
     @mod_only()

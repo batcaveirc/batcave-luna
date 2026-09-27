@@ -285,9 +285,9 @@ async def help_cmd(ctx):
     )
     em.add_field(
         name  = "🌉 The bridge",
-        value = f"`{p}ircping` `{p}ircinfo` `{p}ircbridges` — status\n"
+        value = f"`{p}ircinfo` — status: server, nick, bridges, uptime\n"
                 f"`{p}ircwho` — who is in the IRC room, and can I act there\n"
-                f"`{p}ircnicks [#irc]` · `{p}irctopic [#irc]` — who/what is there\n"
+                f"`{p}irctopic [#irc]` — the room's topic\n"
                 f"`{p}ircjoin #irc [#discord]` · `{p}ircleave #irc` — bridges *(mod)*",
         inline=False,
     )

@@ -761,7 +761,7 @@ class IRCBridge:
         from shared_cmds import is_irc_owner
         body = text[len(config.PREFIX):] if text.startswith(config.PREFIX) else ""
         parts = body.split()
-        if not parts or parts[0].lower() not in ("follow", "unfollow", "following"):
+        if not parts or parts[0].lower() not in ("follow", "unfollow", "following", "part", "leave"):
             return False
         cmd = parts[0].lower()
         if not is_irc_owner(nick, self, irc_ch):
@@ -769,21 +769,30 @@ class IRCBridge:
         if cmd == "following":
             rooms = ", ".join(sorted(self._follow)) or "(none)"
             state = "on" if self._follow_on else "off (IRC_FOLLOW is not set)"
-            self._notice(nick, f"Following [{state}]: {rooms}")
+            self._notice(nick, f"In (followed): {rooms}. Following is {state}. "
+                               f"{config.PREFIX}part #room to leave one.")
             return True
         if len(parts) < 2 or not parts[1].lstrip("#"):
             self._notice(nick, f"{config.PREFIX}{cmd} #room")
             return True
         room = parts[1]
+        r = room if room.startswith("#") else f"#{room}"
+        # Leaving (unfollow/part/leave) always works — no need for follow-mode —
+        # because "get her out of this room" should never depend on a feature
+        # flag. Only JOINING via $follow needs follow-mode on.
+        if cmd in ("unfollow", "part", "leave"):
+            if self.follow_remove(room):
+                self._notice(nick, f"Left {r}.")
+            else:
+                self._notice(nick, f"{r} is a bridged relay room — leaving it would "
+                                   f"kill the relay, so I keep it. Unbridge it first if you mean it.")
+            return True
+        # cmd == "follow"
         if not self._follow_on:
             self._notice(nick, "Following is off — set IRC_FOLLOW to turn it on.")
             return True
-        if cmd == "follow":
-            self.follow_add(room)
-            self._notice(nick, f"Following {room if room.startswith('#') else '#' + room}.")
-        else:
-            self.follow_remove(room)
-            self._notice(nick, f"Left {room if room.startswith('#') else '#' + room}.")
+        self.follow_add(room)
+        self._notice(nick, f"Following {r}.")
         return True
 
     def try_memory_command(self, irc_ch: str, nick: str, text: str) -> bool:
@@ -1827,11 +1836,25 @@ class IRCBridge:
             self._raw(f"JOIN {ch}")
         return True
 
+    def _is_bridged(self, irc_ch: str) -> bool:
+        """A room whose messages are relayed to Discord. Leaving one of THESE
+        would take the relay down, so a manual leave refuses only these — unlike
+        the idle sweep, which also spares boot rooms. Everything else can be
+        left on request."""
+        with self._map_lock:
+            return irc_ch.lower() in self._i2d
+
     def follow_remove(self, irc_ch: str) -> bool:
+        """Leave a room on request. Parts anything that is not a bridged relay
+        room — including boot/extra rooms, which is what the owner could not get
+        her out of before (the old check treated those as un-leaveable too)."""
         ch = irc_ch if irc_ch.startswith("#") else f"#{irc_ch}"
         self._follow.discard(ch)
-        if self._connected and not self._is_home_room(ch):
-            self._raw(f"PART {ch} :following elsewhere")
+        if self._connected and not self._is_bridged(ch):
+            self._raw(f"PART {ch} :leaving on request")
+            return True
+        if self._is_bridged(ch):
+            return False        # bridged: refused, caller explains
         return True
 
     def _follow_sweep(self) -> None:

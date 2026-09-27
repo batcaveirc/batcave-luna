@@ -254,7 +254,7 @@ class IrcModCog(commands.Cog, name="IRC Moderation"):
         self._bridge.send_raw(f"MODE {irc_ch} -{_QUIET} {mask}")
         await ctx.send(f"🔊 Un-quieted `{mask}` in `{irc_ch}`.")
 
-    @commands.command(name="ircwho")
+    @commands.command(name="ircwho", aliases=["who", "nicks"])
     @mod_only()
     async def irc_who(self, ctx: commands.Context):
         """Who is in the bridged room, and can Luna actually act there.

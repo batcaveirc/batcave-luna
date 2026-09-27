@@ -78,9 +78,11 @@ stale = sorted(n for n in OPEN if n not in found)
 c("the OPEN list has no entries for commands that no longer exist",
   not stale, f"stale: {', '.join(stale)}")
 
-print("\n— the ten that were open and should not have been —")
+# ircnicks/ircbridges/ircping were removed as redundant (ircwho/ircinfo cover
+# them), so they are no longer in this list.
+print("\n— the ones that were open and should not have been —")
 for name in ["to", "ircwho", "sendregulars", "regulars", "warnings",
-             "batstatus", "ircnicks", "ircbridges", "ircping", "ircinfo"]:
+             "batstatus", "ircinfo"]:
     entry = found.get(name)
     c(f"${name} is gated", bool(entry and entry[1].checks),
       "not found at all" if not entry else "no check attached")
