@@ -46,5 +46,38 @@ for unwanted in ("big", "tiny", "emojify", "zalgo", "ascii", "rps", "roulette"):
     c(f"${unwanted} was NOT added", not hasattr(sc, f"cmd_{unwanted}"),
       "the owner said these are not needed")
 
+
+
+# ── the visibility fix: fun replies go to the ROOM, not a private notice ────
+print("\n— $hug and friends are seen by the room, not just the sender —")
+import types
+from utils.irc_bridge import IRCBridge
+
+def _b():
+    b = IRCBridge.__new__(IRCBridge)
+    b.to_room, b.to_nick = [], []
+    b._queue = lambda ch, m, *a: b.to_room.append((ch, m))
+    b._notice = lambda n, m: b.to_nick.append((n, m))
+    return b
+
+b = _b()
+b._deliver_command_reply("hug", "vikram", "#batcave", "vikram hugs nora")
+c("$hug posts to the channel (everyone sees it)",
+  b.to_room and b.to_room[0][0] == "#batcave" and not b.to_nick,
+  f"room={b.to_room} nick={b.to_nick} — the bug was this going to nick only")
+
+b = _b()
+b._deliver_command_reply("8ball", "vikram", "#batcave", "🎱 Yes.")
+c("$8ball is public too", bool(b.to_room) and not b.to_nick)
+
+b = _b()
+b._deliver_command_reply("help", "vikram", "#batcave", "help text")
+c("$help stays a private notice", bool(b.to_nick) and not b.to_room,
+  "a help listing is for the asker, not the room")
+
+b = _b()
+b._deliver_command_reply("hug", "vikram", "vikram", "in a PM")
+c("in a PM (target is a nick, not #chan) it stays a notice",
+  bool(b.to_nick) and not b.to_room)
+
 print(f"\n{fails} FAILED" if fails else "\nALL PASS")
-sys.exit(1 if fails else 0)

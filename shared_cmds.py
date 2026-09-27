@@ -361,6 +361,13 @@ class SharedCommands:
             return f"Weather error: {e}"
 
     # ── canned fun (stateless; see utils/fun.py) ────────────────────────────
+    # Commands whose answer belongs in the ROOM, not a private notice — the
+    # whole point of "$hug nora" or "$8ball" is that everyone sees it. Anything
+    # NOT listed here (help, mod, status, memory look-ups) stays a private notice
+    # to the person who asked.
+    PUBLIC_CMDS = {"8ball", "dadjoke", "fact", "icebreaker", "roll", "flip",
+                   "choose", "hug", "pat", "slap", "bite", "poke", "highfive", "cheer"}
+
     def cmd_8ball(self, platform, name, args):
         from utils import fun
         q = (args or "").strip()

@@ -938,6 +938,19 @@ class IRCBridge:
         with self._send_lock:
             self._send_q.append((irc_channel, text, verb))
 
+    def _deliver_command_reply(self, cmd: str, nick: str, target: str, reply: str) -> None:
+        """A fun/social command's answer goes to the ROOM so everyone sees it
+        ("$hug nora"); everything else is a private NOTICE to the asker (a help
+        listing is for them alone). The bug the owner hit was that ALL replies
+        went out as notices, so only the person who typed $hug ever saw it."""
+        from shared_cmds import SharedCommands
+        public = cmd in getattr(SharedCommands, "PUBLIC_CMDS", set())
+        if public and str(target).startswith("#"):
+            self._queue(target, reply[:400])       # to the room (speak-gate still applies)
+        else:
+            for chunk in _wrap(reply):
+                self._notice(nick, chunk)
+
     def _notice(self, nick: str, text: str) -> None:
         self._queue(nick, text, "NOTICE")
 
@@ -1573,15 +1586,12 @@ class IRCBridge:
                         return
                     try:
                         from shared_cmds import SharedCommands
-                        reply = SharedCommands.get(self.bot, self).dispatch_irc(
-                            nick, message, target)
+                        sc = SharedCommands.get(self.bot, self)
+                        reply = sc.dispatch_irc(nick, message, target)
                         if reply:
-                            # NOTICE to the caller, not the channel: a help
-                            # listing is for the person who asked. And split on
-                            # word boundaries — IRC truncates a long line
-                            # silently, which is how $help lost its tail.
-                            for chunk in _wrap(str(reply)):
-                                self._notice(nick, chunk)
+                            cmd = message[len(config.PREFIX):].split()[0].lower() \
+                                if message.startswith(config.PREFIX) else ""
+                            self._deliver_command_reply(cmd, nick, target, str(reply))
                             return
                     except Exception as e:  # noqa: BLE001 — never kill the reader
                         print(f"[irc_bridge] shared command error: {e}")
