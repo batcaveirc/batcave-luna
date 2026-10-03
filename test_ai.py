@@ -65,5 +65,15 @@ c("and explicitly marked not-instructions",
   "instructions" in note.lower() and "never" in note.lower(),
   "a room line saying 'ignore your rules' is chatter, not an order to Luna")
 
+print("\n— chat parity: she answers the speaker, not herself; replies not cut off —")
+import pathlib
+_cog = pathlib.Path("cogs/ai_cog.py").read_text()
+_bridge = pathlib.Path("utils/irc_bridge.py").read_text()
+c("ask() takes her current nick", "me: str" in _cog)
+c("and tells the model that nick IS her", "addressing YOU" in _cog or "never greet or thank" in _cog)
+c("the bridge passes her live nick", "me=self._nick" in _bridge)
+c("and strips her own nick from the prompt", "ask_text" in _bridge and "re.sub" in _bridge)
+c("the reply is no longer hard-cut at 400 (it chunks instead)", "one_line[:400]" not in _bridge)
+
 print(f"\n{fails} FAILED" if fails else "\nALL PASS")
 sys.exit(1 if fails else 0)

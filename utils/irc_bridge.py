@@ -597,10 +597,29 @@ class IRCBridge:
                 return
             if reply:
                 one_line = " ".join(str(reply).split())
-                self._queue(irc_ch, f"{nick}: {one_line[:400]}")
+                # Don't hard-cut at 400 — split across a couple of lines on word
+                # boundaries so a longer answer is not lost mid-word (parity with
+                # Dracula's "never cut off").
+                chunks, rest = [], one_line
+                while rest and len(chunks) < 3:
+                    if len(rest) <= 400:
+                        chunks.append(rest)
+                        break
+                    cut = rest.rfind(" ", 0, 400)
+                    cut = cut if cut > 0 else 400
+                    chunks.append(rest[:cut])
+                    rest = rest[cut:].lstrip()
+                for i, ch in enumerate(chunks):
+                    self._queue(irc_ch, f"{nick}: {ch}" if i == 0 else ch)
 
         try:
-            fut = asyncio.run_coroutine_threadsafe(ask(prompt, context=context), self.loop)
+            # Strip our OWN nick if the line opens by addressing us, so she
+            # answers the speaker, not herself ("andromeda u there" must not get
+            # "Hey there, Andromeda!"). Pass the live nick so she knows it is her.
+            mine = "|".join(re.escape(n) for n in {self._nick.lower(), config.IRC_NICK.lower()} if n)
+            ask_text = re.sub(rf"^\s*(?:{mine})\s*[:,]?\s*", "", prompt, flags=re.I).strip() or prompt
+            fut = asyncio.run_coroutine_threadsafe(
+                ask(ask_text, context=context, me=self._nick), self.loop)
             fut.add_done_callback(_done)
             return True
         except Exception as e:  # noqa: BLE001
