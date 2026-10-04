@@ -14,15 +14,18 @@ on:
     - cron: '*/15 * * * *'
   workflow_dispatch: {}
 
-# One Luna at a time. cancel-in-progress:false means the 5-minute cron does NOT
-# kill a running bot — the new run waits and takes over when the current one
-# hits its timeout below. Continuous coverage with a handoff every ~5.8h.
+# One Luna at a time. The cron (schedule) must NOT kill a running bot — the new
+# run waits and takes over when the current one hits its timeout below, giving
+# continuous coverage with a handoff every ~5.8h. But a PUSH is a deploy: it
+# SHOULD cancel the running bot so new code goes live at once instead of sitting
+# queued for hours behind the long-running job. So gate cancel-in-progress on
+# the event — true for push, false for schedule/dispatch. (Matches Dracula.)
 #
 # NOTE: the concurrency group is Luna's own, so this never queues behind or
 # cancels the Dracula workflow in the other repo.
 concurrency:
   group: luna-bot
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
   run-bot:
@@ -75,6 +78,13 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_MODEL: ${{ secrets.GROQ_MODEL || 'openai/gpt-oss-20b' }}
           GROQ_MODEL_FALLBACK: ${{ secrets.GROQ_MODEL_FALLBACK || 'openai/gpt-oss-120b' }}
+          # Fallback tanks on separate meters: when Groq's day is spent (429 =
+          # "too many questions"), ask() falls through to these instead of going
+          # silent. Dormant until the matching secret is set — no key, no calls.
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'gemini-2.0-flash' }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free' }}
 
           # ── IRC: plain defaults so a missing secret can never stop the bot.
           #    IRC_CHANNEL defaults to the emoji room Luna lives in. ────────
