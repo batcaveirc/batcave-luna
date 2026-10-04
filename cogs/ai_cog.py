@@ -33,8 +33,6 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 # OpenRouter is OpenAI-native — one key, a shelf of free models.
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-# GitHub Models — OpenAI-shaped, authed with the Actions GITHUB_TOKEN (no key).
-GITHUB_API_URL = "https://models.github.ai/inference/chat/completions"
 REASONING_MIN_TOKENS = 320
 REQUEST_TIMEOUT = 30
 
@@ -115,7 +113,7 @@ async def _gemini(session: aiohttp.ClientSession, key: str, messages: list, max_
     Gemini speaks OpenAI's dialect at GEMINI_API_URL, so the very same messages
     work unchanged. Returns the reply, or "" on any failure so the caller gives
     up cleanly instead of raising inside a chat command."""
-    model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip()
+    model = os.getenv("GEMINI_MODEL", "gemini-flash-latest").strip()
     payload = {
         "model": model,
         "temperature": 0.8,
@@ -174,35 +172,6 @@ async def _openrouter(session: aiohttp.ClientSession, key: str, messages: list, 
     return _clean((choice.get("message", {}) or {}).get("content", ""))
 
 
-async def _github(session: aiohttp.ClientSession, token: str, messages: list, max_tokens: int) -> str:
-    """Fourth tank. GitHub Models is OpenAI-shaped and authed with the Actions
-    GITHUB_TOKEN — no separate key to manage. Model ids are "publisher/name",
-    e.g. openai/gpt-4o-mini. Returns the reply, or "" on any failure (logged)."""
-    model = os.getenv("GITHUB_MODEL", "openai/gpt-4o-mini").strip()
-    payload = {
-        "model": model,
-        "temperature": 0.8,
-        "max_tokens": max(max_tokens, 120),
-        "messages": messages,
-    }
-    try:
-        async with session.post(
-            GITHUB_API_URL,
-            headers={"Authorization": f"Bearer {token}"},
-            json=payload,
-            timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
-        ) as res:
-            if res.status != 200:
-                print(f"[ai] github-models HTTP {res.status}: {(await res.text())[:200]}", flush=True)
-                return ""
-            data = await res.json()
-    except Exception as exc:  # noqa: BLE001 — a chat command must not raise
-        print(f"[ai] github-models call errored: {exc}", flush=True)
-        return ""
-    choice = (data.get("choices") or [{}])[0]
-    return _clean((choice.get("message", {}) or {}).get("content", ""))
-
-
 async def ask(prompt: str, max_tokens: int = 160, context: str = "", me: str = "") -> str:
     """Return Luna's reply, or a plain-language reason it could not answer.
 
@@ -217,8 +186,7 @@ async def ask(prompt: str, max_tokens: int = 160, context: str = "", me: str = "
     key = os.getenv("GROQ_API_KEY", "").strip()
     gkey = os.getenv("GEMINI_API_KEY", "").strip()
     okey = os.getenv("OPENROUTER_API_KEY", "").strip()
-    ghtoken = os.getenv("GITHUB_MODELS_TOKEN", "").strip()
-    if not key and not gkey and not okey and not ghtoken:
+    if not key and not gkey and not okey:
         return "my voice isn't wired up yet — the owner needs to set GROQ_API_KEY."
 
     messages = [
@@ -308,13 +276,6 @@ async def ask(prompt: str, max_tokens: int = 160, context: str = "", me: str = "
             if text:
                 return text
             last_error = f"{last_error}; openrouter silent too"
-        # Fourth tank: GitHub Models — no key, the Actions GITHUB_TOKEN.
-        if ghtoken:
-            text = await _github(session, ghtoken, messages, max_tokens)
-            if text:
-                return text
-            last_error = f"{last_error}; github silent too"
-
     # Never surface the plumbing (which provider, which HTTP status, rate limits,
     # keys) to the room — that is the owner's to read in the logs. The room gets a
     # plain, in-character line with no hint of what is wired up or what failed.

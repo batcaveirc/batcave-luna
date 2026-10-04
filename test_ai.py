@@ -91,10 +91,6 @@ c("and a third tank, OpenRouter, after Gemini",
   "OPENROUTER_API_KEY" in _cog and "openrouter.ai/api/v1" in _cog)
 c("OpenRouter is only reached after Gemini (right order)",
   -1 < _cog.find("await _gemini(session") < _cog.find("await _openrouter(session"))
-c("and a fourth tank, GitHub Models — no key, the Actions GITHUB_TOKEN",
-  "GITHUB_MODELS_TOKEN" in _cog and "models.github.ai" in _cog)
-c("the tanks are tried in order: Gemini, OpenRouter, GitHub",
-  -1 < _cog.find("await _openrouter(session") < _cog.find("await _github(session"))
 
 print("\n— sycophancy: she holds the answer instead of caving to a guess —")
 c("the prompt forbids confirming a wrong guess",
