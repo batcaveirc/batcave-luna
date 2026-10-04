@@ -33,6 +33,8 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 # OpenRouter is OpenAI-native — one key, a shelf of free models.
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+# GitHub Models — OpenAI-shaped, authed with the Actions GITHUB_TOKEN (no key).
+GITHUB_API_URL = "https://models.github.ai/inference/chat/completions"
 REASONING_MIN_TOKENS = 320
 REQUEST_TIMEOUT = 30
 
@@ -128,9 +130,11 @@ async def _gemini(session: aiohttp.ClientSession, key: str, messages: list, max_
             timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
         ) as res:
             if res.status != 200:
+                print(f"[ai] gemini HTTP {res.status}: {(await res.text())[:200]}", flush=True)
                 return ""
             data = await res.json()
-    except Exception:  # noqa: BLE001 — a chat command must not raise
+    except Exception as exc:  # noqa: BLE001 — a chat command must not raise
+        print(f"[ai] gemini call errored: {exc}", flush=True)
         return ""
     choice = (data.get("choices") or [{}])[0]
     return _clean((choice.get("message", {}) or {}).get("content", ""))
@@ -160,9 +164,40 @@ async def _openrouter(session: aiohttp.ClientSession, key: str, messages: list, 
             timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
         ) as res:
             if res.status != 200:
+                print(f"[ai] openrouter HTTP {res.status}: {(await res.text())[:200]}", flush=True)
                 return ""
             data = await res.json()
-    except Exception:  # noqa: BLE001 — a chat command must not raise
+    except Exception as exc:  # noqa: BLE001 — a chat command must not raise
+        print(f"[ai] openrouter call errored: {exc}", flush=True)
+        return ""
+    choice = (data.get("choices") or [{}])[0]
+    return _clean((choice.get("message", {}) or {}).get("content", ""))
+
+
+async def _github(session: aiohttp.ClientSession, token: str, messages: list, max_tokens: int) -> str:
+    """Fourth tank. GitHub Models is OpenAI-shaped and authed with the Actions
+    GITHUB_TOKEN — no separate key to manage. Model ids are "publisher/name",
+    e.g. openai/gpt-4o-mini. Returns the reply, or "" on any failure (logged)."""
+    model = os.getenv("GITHUB_MODEL", "openai/gpt-4o-mini").strip()
+    payload = {
+        "model": model,
+        "temperature": 0.8,
+        "max_tokens": max(max_tokens, 120),
+        "messages": messages,
+    }
+    try:
+        async with session.post(
+            GITHUB_API_URL,
+            headers={"Authorization": f"Bearer {token}"},
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
+        ) as res:
+            if res.status != 200:
+                print(f"[ai] github-models HTTP {res.status}: {(await res.text())[:200]}", flush=True)
+                return ""
+            data = await res.json()
+    except Exception as exc:  # noqa: BLE001 — a chat command must not raise
+        print(f"[ai] github-models call errored: {exc}", flush=True)
         return ""
     choice = (data.get("choices") or [{}])[0]
     return _clean((choice.get("message", {}) or {}).get("content", ""))
@@ -182,7 +217,8 @@ async def ask(prompt: str, max_tokens: int = 160, context: str = "", me: str = "
     key = os.getenv("GROQ_API_KEY", "").strip()
     gkey = os.getenv("GEMINI_API_KEY", "").strip()
     okey = os.getenv("OPENROUTER_API_KEY", "").strip()
-    if not key and not gkey and not okey:
+    ghtoken = os.getenv("GITHUB_MODELS_TOKEN", "").strip()
+    if not key and not gkey and not okey and not ghtoken:
         return "my voice isn't wired up yet — the owner needs to set GROQ_API_KEY."
 
     messages = [
@@ -236,7 +272,8 @@ async def ask(prompt: str, max_tokens: int = 160, context: str = "", me: str = "
                         last_error = "groq key rejected (401)"
                         if gkey:
                             break
-                        return "my key was rejected — the owner needs to refresh it."
+                        print("[ai] groq 401 (key rejected), no fallback key set", flush=True)
+                        return "the moon is quiet right now — ask me again in a little while."
                     if res.status != 200:
                         last_error = f"HTTP {res.status}"
                         continue
@@ -271,8 +308,18 @@ async def ask(prompt: str, max_tokens: int = 160, context: str = "", me: str = "
             if text:
                 return text
             last_error = f"{last_error}; openrouter silent too"
+        # Fourth tank: GitHub Models — no key, the Actions GITHUB_TOKEN.
+        if ghtoken:
+            text = await _github(session, ghtoken, messages, max_tokens)
+            if text:
+                return text
+            last_error = f"{last_error}; github silent too"
 
-    return f"the moon is quiet right now ({last_error})."
+    # Never surface the plumbing (which provider, which HTTP status, rate limits,
+    # keys) to the room — that is the owner's to read in the logs. The room gets a
+    # plain, in-character line with no hint of what is wired up or what failed.
+    print(f"[ai] all providers failed: {last_error}", flush=True)
+    return "the moon is quiet right now — ask me again in a little while."
 
 
 class AICog(commands.Cog):
