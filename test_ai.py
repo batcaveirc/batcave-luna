@@ -75,5 +75,27 @@ c("the bridge passes her live nick", "me=self._nick" in _bridge)
 c("and strips her own nick from the prompt", "ask_text" in _bridge and "re.sub" in _bridge)
 c("the reply is no longer hard-cut at 400 (it chunks instead)", "one_line[:400]" not in _bridge)
 
+print("\n— a Gemini fallback, so 'too many questions' is no longer the end of it —")
+# The owner saw Andromeda answer "too many questions at once" and go quiet: that
+# is Groq's 429, metered per account. Gemini is a separate free tank.
+c("she reads a GEMINI_API_KEY", "GEMINI_API_KEY" in _cog)
+c("and calls Gemini's OpenAI-compatible endpoint", "generativelanguage.googleapis.com" in _cog)
+c("a 429 falls through to Gemini instead of dead-ending",
+  "if gkey" in _cog and 'res.status == 429' in _cog)
+c("Groq is skipped entirely when only a Gemini key is set",
+  "_models() if key else []" in _cog)
+c("the messages are built once and reused for both providers",
+  _cog.count('"role": "system"') == 1,
+  f'found {_cog.count(chr(34) + "role" + chr(34) + ": " + chr(34) + "system" + chr(34))} system blocks')
+c("and a third tank, OpenRouter, after Gemini",
+  "OPENROUTER_API_KEY" in _cog and "openrouter.ai/api/v1" in _cog)
+c("OpenRouter is only reached after Gemini (right order)",
+  -1 < _cog.find("await _gemini(session") < _cog.find("await _openrouter(session"))
+
+print("\n— sycophancy: she holds the answer instead of caving to a guess —")
+c("the prompt forbids confirming a wrong guess",
+  "do not just agree" in ai.SYSTEM_PROMPT.lower(),
+  "a user asking 'is it X?' must not make X the answer")
+
 print(f"\n{fails} FAILED" if fails else "\nALL PASS")
 sys.exit(1 if fails else 0)

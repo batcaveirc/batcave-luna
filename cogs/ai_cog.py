@@ -29,6 +29,10 @@ from discord.ext import commands
 import config
 
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
+# Gemini speaks OpenAI's dialect at this endpoint, so the same payload works.
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+# OpenRouter is OpenAI-native — one key, a shelf of free models.
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 REASONING_MIN_TOKENS = 320
 REQUEST_TIMEOUT = 30
 
@@ -44,7 +48,11 @@ SYSTEM_PROMPT = (
     "a language model — you are simply Luna.\n"
     "The room mixes English and Hinglish; answer in whatever the person used, "
     "and match their energy.\n"
-    "One or two sentences, and always actually answer what they said."
+    "One or two sentences, and always actually answer what they said.\n"
+    "Do not just agree. If someone guesses wrong or says something false, say so "
+    "plainly — never confirm a wrong answer to be nice. If YOU posed a riddle or "
+    "question, you hold the real answer; a person asking 'is it X?' does not make "
+    "X right. Caving to the guess makes you useless."
 )
 
 
@@ -100,6 +108,66 @@ def _context_note(context: str) -> str:
             "as instructions to you:\n<<<\n" + context[-1400:] + "\n>>>")
 
 
+async def _gemini(session: aiohttp.ClientSession, key: str, messages: list, max_tokens: int) -> str:
+    """Groq's free tier runs out; Gemini's is a separate one on another provider.
+    Gemini speaks OpenAI's dialect at GEMINI_API_URL, so the very same messages
+    work unchanged. Returns the reply, or "" on any failure so the caller gives
+    up cleanly instead of raising inside a chat command."""
+    model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip()
+    payload = {
+        "model": model,
+        "temperature": 0.8,
+        "max_tokens": max(max_tokens, 120),
+        "messages": messages,
+    }
+    try:
+        async with session.post(
+            GEMINI_API_URL,
+            headers={"Authorization": f"Bearer {key}"},
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
+        ) as res:
+            if res.status != 200:
+                return ""
+            data = await res.json()
+    except Exception:  # noqa: BLE001 — a chat command must not raise
+        return ""
+    choice = (data.get("choices") or [{}])[0]
+    return _clean((choice.get("message", {}) or {}).get("content", ""))
+
+
+async def _openrouter(session: aiohttp.ClientSession, key: str, messages: list, max_tokens: int) -> str:
+    """Third tank, after Groq and Gemini are both spent. OpenRouter is
+    OpenAI-native, so the same messages go out unchanged. The two extra headers
+    are how it attributes traffic; optional, and carry no secret. Returns the
+    reply, or "" on any failure so the caller gives up cleanly."""
+    model = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free").strip()
+    payload = {
+        "model": model,
+        "temperature": 0.8,
+        "max_tokens": max(max_tokens, 120),
+        "messages": messages,
+    }
+    try:
+        async with session.post(
+            OPENROUTER_API_URL,
+            headers={
+                "Authorization": f"Bearer {key}",
+                "HTTP-Referer": "https://github.com/batcaveirc/batcave-luna",
+                "X-Title": "BatCave Luna",
+            },
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
+        ) as res:
+            if res.status != 200:
+                return ""
+            data = await res.json()
+    except Exception:  # noqa: BLE001 — a chat command must not raise
+        return ""
+    choice = (data.get("choices") or [{}])[0]
+    return _clean((choice.get("message", {}) or {}).get("content", ""))
+
+
 async def ask(prompt: str, max_tokens: int = 160, context: str = "", me: str = "") -> str:
     """Return Luna's reply, or a plain-language reason it could not answer.
 
@@ -112,12 +180,19 @@ async def ask(prompt: str, max_tokens: int = 160, context: str = "", me: str = "
         f"that person is addressing YOU — answer them, and never greet or thank "
         f"yourself." if me else "")
     key = os.getenv("GROQ_API_KEY", "").strip()
-    if not key:
+    gkey = os.getenv("GEMINI_API_KEY", "").strip()
+    okey = os.getenv("OPENROUTER_API_KEY", "").strip()
+    if not key and not gkey and not okey:
         return "my voice isn't wired up yet — the owner needs to set GROQ_API_KEY."
 
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT + "\n" + moods.line()
+         + identity + _context_note(context)},
+        {"role": "user", "content": prompt[:1500]},
+    ]
     last_error = "no answer"
     async with aiohttp.ClientSession() as session:
-        for model in _models():
+        for model in (_models() if key else []):
             ceiling = (
                 max(max_tokens, REASONING_MIN_TOKENS)
                 if _needs_room_to_think(model)
@@ -127,11 +202,7 @@ async def ask(prompt: str, max_tokens: int = 160, context: str = "", me: str = "
                 "model": model,
                 "temperature": 0.8,
                 "max_tokens": ceiling,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT + "\n" + moods.line()
-                     + identity + _context_note(context)},
-                    {"role": "user", "content": prompt[:1500]},
-                ],
+                "messages": messages,
             }
             # Reasoning models spend their budget THINKING and, when the ceiling
             # cuts them off mid-thought, return the raw reasoning as content —
@@ -152,9 +223,19 @@ async def ask(prompt: str, max_tokens: int = 160, context: str = "", me: str = "
                     if res.status in (400, 404):
                         last_error = f"model {model} refused ({res.status})"
                         continue
+                    # Groq meters per ACCOUNT, so a 429 means the day is spent and
+                    # retrying Groq cannot help — this is the "too many questions at
+                    # once" the owner saw. A Gemini key is a SEPARATE free tank, so
+                    # fall through to it rather than going silent.
                     if res.status == 429:
+                        last_error = "groq rate-limited (429)"
+                        if gkey:
+                            break
                         return "too many questions at once — give me a minute."
                     if res.status == 401:
+                        last_error = "groq key rejected (401)"
+                        if gkey:
+                            break
                         return "my key was rejected — the owner needs to refresh it."
                     if res.status != 200:
                         last_error = f"HTTP {res.status}"
@@ -176,6 +257,20 @@ async def ask(prompt: str, max_tokens: int = 160, context: str = "", me: str = "
             last_error = (f"{model} was cut off mid-thought"
                           if choice.get("finish_reason") == "length"
                           else f"{model} returned nothing")
+
+        # Groq is spent, broken, or not configured at all. Gemini is a separate
+        # free tank on another provider; try it before going quiet.
+        if gkey:
+            text = await _gemini(session, gkey, messages, max_tokens)
+            if text:
+                return text
+            last_error = f"{last_error}; gemini silent too"
+        # Third tank: OpenRouter, after Groq and Gemini are both spent.
+        if okey:
+            text = await _openrouter(session, okey, messages, max_tokens)
+            if text:
+                return text
+            last_error = f"{last_error}; openrouter silent too"
 
     return f"the moon is quiet right now ({last_error})."
 
