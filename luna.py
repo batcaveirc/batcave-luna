@@ -466,10 +466,40 @@ def _install_signal_handlers() -> None:
             pass          # not the main thread / unsupported platform
 
 
+def _install_crash_recorders() -> None:
+    """Protect against the exact failure mode we hit 2026-10-06: Luna run
+    FAILED at 3h5m, GitHub purged the log blob before I could read it, and
+    there was zero evidence left of what killed her. Now every unhandled
+    exception — in the main thread, in a worker thread, or in a background
+    task — is PRINTED to stdout BEFORE we exit, so the Actions log captures
+    it. GitHub keeps stdout even when it later expires the blob store.
+    """
+    import sys as _sys
+    import threading as _threading
+    import traceback as _tb
+
+    def _main_hook(exc_type, exc_value, exc_tb):
+        print("[luna] ★★ UNHANDLED EXCEPTION in main thread — evidence below ★★", flush=True)
+        _tb.print_exception(exc_type, exc_value, exc_tb)
+        _sys.stdout.flush()
+        # Call default hook too (which prints the same + exits).
+        _sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+    def _thread_hook(args):
+        print(f"[luna] ★★ UNHANDLED EXCEPTION in thread {args.thread.name!r} — evidence below ★★", flush=True)
+        _tb.print_exception(args.exc_type, args.exc_value, args.exc_traceback)
+        _sys.stdout.flush()
+        # Default behaviour: don't kill the process, just the thread.
+
+    _sys.excepthook = _main_hook
+    _threading.excepthook = _thread_hook
+
+
 if __name__ == "__main__":
     import errno as _errno
     import socket as _socket
 
+    _install_crash_recorders()
     _install_signal_handlers()
 
     # ── Single-instance lock — prevents duplicate Luna processes ──────────
@@ -499,4 +529,27 @@ if __name__ == "__main__":
         print(f"[dashboard] {e}")
 
     print("🌉 Luna relay bot starting...")
-    asyncio.run(main())
+    # Guard asyncio.run against a crash in main() or any task it awaits.
+    # Without this, an unhandled exception in the Discord loop or any
+    # background task propagates out and the process exits silently from
+    # the host's perspective. We print the traceback so the Actions log
+    # captures it (even though the blob store expires fast on failed
+    # runs — stdout is preserved longer).
+    try:
+        asyncio.run(main())
+    except SystemExit:
+        raise                        # intentional exit (signal handler)
+    except KeyboardInterrupt:
+        print("[luna] KeyboardInterrupt — bye.", flush=True)
+    except Exception as _exc:        # noqa: BLE001
+        import traceback as _tb
+        print("[luna] ★★ asyncio.run(main()) CRASHED — evidence below ★★", flush=True)
+        _tb.print_exc()
+        # Hand off to a fresh runner before we exit so Andromeda is not
+        # offline during the cron gap. _dispatch_successor already no-ops
+        # cleanly if GH_PAT is unset.
+        try:
+            _dispatch_successor("main-crashed")
+        except Exception as _derr:   # noqa: BLE001
+            print(f"[luna] dispatch on crash failed: {_derr}", flush=True)
+        raise SystemExit(1)
