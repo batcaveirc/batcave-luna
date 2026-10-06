@@ -68,6 +68,17 @@ _SEND_DELAY          = 0.5   # seconds between outbound IRC messages (rate-limit
 _NICK_RECLAIM_SECS = 60      # how often to check we still hold our own nick
 _MEMORY_COOLDOWN = 8         # seconds between one person's history commands
 _RECENT_LINES = 25           # live tail kept per room for grounding the AI
+# Phase 3: per-user memory of what people have said in #batcave recently,
+# used to inject "you remember X said Y" into AI replies. Smaller than the
+# live tail per room, longer-lived.
+_MEMORY_MAX_PER_USER = max(1, int(os.getenv("MEMORY_MAX_PER_USER") or 10))
+# No floor: a test sets 2s, production sets days; both are the operator's call.
+_MEMORY_TTL_SEC = max(1, int(int(os.getenv("MEMORY_TTL_MS") or (7 * 24 * 60 * 60 * 1000)) / 1000))
+_MEMORY_MIN_LEN = max(1, int(os.getenv("MEMORY_MIN_LEN") or 15))
+# Phase 2: inter-bot teamwork via #batcave-trust. Heartbeat interval and the
+# silence threshold after which the partner is treated as down.
+_TRUST_HB_SEC = max(60, int(int(os.getenv("TRUST_HB_MS") or 180000) / 1000))
+_PARTNER_SILENT_SEC = max(_TRUST_HB_SEC * 2, 6 * 60)
 # Following the community's rooms. Luna leaves a room herself once it has been
 # quiet this long — but she does NOT rejoin on a timer, because join/part
 # cycling is the exact abuse signature this network kills bots for. Coming back
@@ -255,6 +266,13 @@ class IRCBridge:
         # summary of the 1872 novella Carmilla. In memory only, tiny, and it
         # is the live tail; the durable record still lives in Discord.
         self._recent: Dict[str, deque] = {}
+        # ── Phase 2+3: per-user memory + inter-bot teamwork ────────────────
+        # Each bot keeps its own view (both see every #batcave line anyway).
+        # Memory of #batcave only; TTL and caps keep RAM bounded.
+        self._user_memory: Dict[str, list] = {}
+        self._user_memory_lock = threading.Lock()
+        self._partner_last_seen: float = 0.0
+        self._trust_hb_timer = None
         # Room-following. OFF unless IRC_FOLLOW is set: it changes what rooms the
         # bot sits in, and that should never be a surprise. The follow set is
         # rooms the OWNER named (config or $follow) — never rooms discovered by
@@ -562,6 +580,123 @@ class IRCBridge:
         with self._topics_lock:
             return self._topics.get(ch)
 
+    # ── Phase 3: per-user memory of #batcave ───────────────────────────
+    def _remember_line(self, nick: str, text: str) -> None:
+        n = (nick or "").lower()
+        if not n or n == (self._nick or "").lower():
+            return
+        try:
+            if self.is_one_of_ours(nick):
+                return
+        except Exception:
+            pass
+        t = (text or "").strip()
+        if len(t) < _MEMORY_MIN_LEN:
+            return
+        if t.startswith(("$", "!!", ".")):
+            return
+        if t.startswith("http://") or t.startswith("https://"):
+            # URL-only lines are not personal "about them".
+            if " " not in t:
+                return
+        with self._user_memory_lock:
+            lst = self._user_memory.setdefault(n, [])
+            lst.append({"t": time.time(), "text": t[:200]})
+            while len(lst) > _MEMORY_MAX_PER_USER:
+                lst.pop(0)
+
+    def _memory_for(self, nick: str) -> str:
+        """Return a formatted recall block for the prompt, or '' if empty.
+
+        Last line is dropped — that's the one the user just typed; the model
+        already sees it. Memory is OLDER context.
+        """
+        n = (nick or "").lower()
+        now = time.time()
+        with self._user_memory_lock:
+            lst = self._user_memory.get(n, [])
+            fresh = [e for e in lst if now - e["t"] <= _MEMORY_TTL_SEC]
+            if fresh != lst:
+                if fresh:
+                    self._user_memory[n] = fresh
+                else:
+                    self._user_memory.pop(n, None)
+        older = fresh[:-1][-6:]
+        if not older:
+            return ""
+        parts = []
+        for e in older:
+            mins = max(0, int((now - e["t"]) / 60))
+            ago = f"{mins}m" if mins < 60 else (f"{mins // 60}h" if mins < 1440 else f"{mins // 1440}d")
+            parts.append(f"  - [{ago} ago] {e['text']}")
+        return "\n".join(parts)
+
+    # ── Phase 2: inter-bot teamwork via #batcave-trust ─────────────────
+    def _trust_send(self, verb: str, data: dict) -> None:
+        """Compact machine message to the trust channel. Human chatter there
+        is ignored; bots only parse lines prefixed with '::'."""
+        if not TRUST_CHANNEL:
+            return
+        try:
+            import json as _json
+            self._raw(f"PRIVMSG {TRUST_CHANNEL} :::{verb} {_json.dumps(data, separators=(',', ':'))}")
+        except Exception:
+            pass            # never block normal operation
+
+    def _handle_trust_line(self, from_nick: str, text: str) -> None:
+        """Parse '::verb {json}' from the trust channel.
+
+        Everything that doesn't match the shape is ignored on purpose — the
+        trust channel is also for humans managing ChanServ flags, and their
+        chatter is theirs."""
+        s = (text or "").lstrip()
+        if not s.startswith("::"):
+            return
+        rest = s[2:]
+        if " " in rest:
+            verb, payload = rest.split(" ", 1)
+        else:
+            verb, payload = rest, ""
+        try:
+            import json as _json
+            data = _json.loads(payload) if payload else {}
+        except Exception:
+            return
+        if verb == "hb":
+            n = str(data.get("n", "")).lower()
+            if n and n != (self._nick or "").lower():
+                self._partner_last_seen = time.time()
+        # Reserved for later cross-sync phases: ::saw ::act ::mem
+
+    def partner_is_silent(self) -> bool:
+        return self._partner_last_seen > 0 and (time.time() - self._partner_last_seen) > _PARTNER_SILENT_SEC
+
+    def _start_trust_teamwork(self) -> None:
+        """Join the trust channel and start the heartbeat. Idempotent."""
+        if self._trust_hb_timer is not None:
+            return
+        if not TRUST_CHANNEL:
+            return
+        try:
+            self._raw(f"JOIN {TRUST_CHANNEL}")
+        except Exception:
+            pass
+
+        def _beat():
+            try:
+                self._trust_send("hb", {"n": self._nick, "t": int(time.time())})
+            except Exception:
+                pass
+            # Reschedule
+            self._trust_hb_timer = threading.Timer(_TRUST_HB_SEC, _beat)
+            self._trust_hb_timer.daemon = True
+            self._trust_hb_timer.start()
+
+        # First heartbeat 15s in, so the registration burst has cleared.
+        self._trust_hb_timer = threading.Timer(15.0, _beat)
+        self._trust_hb_timer.daemon = True
+        self._trust_hb_timer.start()
+
     def ask_luna(self, irc_ch: str, nick: str, prompt: str) -> bool:
         """Answer someone in the channel, using the Discord loop for the call.
 
@@ -588,6 +723,13 @@ class IRCBridge:
         # caller just typed is already in here.
         lines = list(self._recent.get(irc_ch.lower(), ()))[-_RECENT_LINES:]
         context = "\n".join(f"{who}: {said}" for who, said in lines)
+        # Phase 3: and what THIS speaker has said in #batcave recently, days
+        # ago too. Appended to context so ai_cog._context_note treats it as
+        # overheard chatter (never instructions), same framing as live tail.
+        memory = self._memory_for(nick)
+        if memory:
+            context = (context + "\n\n" if context else "") \
+                + f"What {nick} has said in #batcave recently (you remember):\n{memory}"
 
         def _done(fut):
             try:
@@ -1304,6 +1446,12 @@ class IRCBridge:
                 for ch in self._follow:
                     self._raw(f"JOIN {ch}")
                     self._last_activity[ch.lower()] = time.time()
+            # Phase 2: team up with the other bot on the trust channel. Delayed
+            # so it does not fight for pacer budget with the opening JOINs.
+            try:
+                threading.Timer(25.0, self._start_trust_teamwork).start()
+            except Exception as e:  # noqa: BLE001
+                print(f"[irc_bridge] trust teamwork start failed: {e}")
             # Disclose the owner's declared-adult rooms in their topic, so
             # "entering is the agreement" still holds even though no one ran
             # $nsfw on. Best-effort and delayed so ChanServ autoop lands first;
@@ -1520,6 +1668,16 @@ class IRCBridge:
             if nick.lower() in (self._nick.lower(), config.IRC_NICK.lower(),
                                 f"{config.IRC_NICK}_".lower()):
                 return
+            # Phase 2: trust-channel inter-bot comms. Short-circuit BEFORE any
+            # moderation/relay path — the trust channel is for bots and flag
+            # admins, nothing it carries should land in Discord or trigger
+            # moderation. Replay-filtered already above.
+            if TRUST_CHANNEL and target.lower() == TRUST_CHANNEL.lower():
+                try:
+                    self._handle_trust_line(nick, message)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[irc_bridge] trust line error: {e}")
+                return
             # Replayed channel history is not new conversation: relaying it
             # would repost the backlog to Discord on every restart, and
             # answering it would have Luna reply to questions from hours ago.
@@ -1532,6 +1690,15 @@ class IRCBridge:
             buf = self._recent.setdefault(target.lower(), deque(maxlen=_RECENT_LINES))
             buf.append((nick, message[:300]))
             self._last_activity[target.lower()] = time.time()
+            # Phase 3: per-user memory for #batcave only (home channel).
+            # Recruit rooms / followed rooms are NOT scanned for memory — the
+            # bot's "sentient recall" is only of this room, not surveillance.
+            try:
+                home = (config.IRC_CHANNEL or "#batcave").split(",")[0].strip().lower()
+                if target.lower() == home:
+                    self._remember_line(nick, message)
+            except Exception as e:  # noqa: BLE001 — memory must never break chat
+                print(f"[irc_bridge] memory error: {e}")
             # A live trivia line? Check it before anything else consumes the msg.
             if self._trivia_channel and not message.startswith(config.PREFIX):
                 self.check_trivia_answer(target, nick, message)

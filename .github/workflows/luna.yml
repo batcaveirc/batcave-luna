@@ -97,6 +97,10 @@ jobs:
           # backstop keeps working). GITHUB_TOKEN cannot trigger new runs.
           # GITHUB_REPOSITORY is already set automatically by Actions.
           GH_PAT: ${{ secrets.GH_PAT }}
+          # Phase 2+3 teamwork. Defaults are fine; override only if the trust
+          # channel moves or the heartbeat cadence needs tuning.
+          IRC_TRUST_CHANNEL: ${{ secrets.IRC_TRUST_CHANNEL || '#batcave-trust' }}
+          TRUST_HB_MS: ${{ secrets.TRUST_HB_MS || '180000' }}
 
           # ── IRC: plain defaults so a missing secret can never stop the bot.
           #    IRC_CHANNEL defaults to the emoji room Luna lives in. ────────
