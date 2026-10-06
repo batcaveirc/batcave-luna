@@ -401,6 +401,41 @@ async def main():
         await bot.start(config.DISCORD_TOKEN)
 
 
+def _dispatch_successor(reason: str) -> None:
+    """Phase 1: ask GitHub Actions to start the next Luna run before we quit,
+    so Andromeda is not offline while the throttled cron catches up.
+
+    Trap: a workflow dispatched by GITHUB_TOKEN does NOT create a new run
+    (GitHub's recursion guard). This needs GH_PAT — a PAT with 'workflow'
+    scope. Without it we no-op and log, and the cron is the backstop (same as
+    before Phase 1). Called from the signal handler, so this is BLOCKING on
+    purpose — the HTTP request has to finish before SystemExit.
+    """
+    import urllib.request
+    import urllib.error
+    import json
+    token = os.getenv("GH_PAT", "").strip()
+    if not token:
+        print(f"[luna] self-restart: no GH_PAT set — cron is the backstop ({reason})")
+        return
+    repo = os.getenv("GITHUB_REPOSITORY", "batcaveirc/batcave-luna")
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/luna.yml/dispatches"
+    body = json.dumps({"ref": "main"}).encode("utf-8")
+    req = urllib.request.Request(url, data=body, method="POST", headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=5) as res:
+            print(f"[luna] self-restart: successor dispatched ({reason}, HTTP {res.status})")
+    except urllib.error.HTTPError as e:
+        print(f"[luna] self-restart: HTTP {e.code} — {e.read()[:120]!r} ({reason})")
+    except Exception as e:  # noqa: BLE001 — must never block exit
+        print(f"[luna] self-restart: {e} ({reason})")
+
+
 def _install_signal_handlers() -> None:
     """Leave IRC cleanly when the host stops us.
 
@@ -416,6 +451,12 @@ def _install_signal_handlers() -> None:
             bridge.quit()
         except Exception as e:  # noqa: BLE001 — never block the exit
             print(f"[luna] quit error: {e}")
+        # Hand the room over to a fresh runner BEFORE SystemExit, so Andromeda
+        # does not vanish while the throttled cron catches up.
+        try:
+            _dispatch_successor(f"signal {signum}")
+        except Exception as e:  # noqa: BLE001 — must never block exit
+            print(f"[luna] dispatch error: {e}")
         raise SystemExit(0)
 
     for sig in (signal.SIGTERM, signal.SIGINT):

@@ -1984,6 +1984,16 @@ class IRCBridge:
         self._rotations_at.append(time.time())
         print(f"[irc_bridge] Rotating {self._nick} -> {nxt}")
         self._raw(f"NICK {nxt}")
+        # Owner-only visibility: private NOTICE to each configured owner nick
+        # so Vikram can see rotations happening without spamming the room (and
+        # without strangers correlating base-nick -> rotation-nick, which is
+        # the whole point of the rotation).
+        try:
+            from shared_cmds import OWNERS_IRC
+            for owner_nick in OWNERS_IRC:
+                self._raw(f"NOTICE {owner_nick} :\x02[rotation]\x02 {self._nick} -> {nxt}")
+        except Exception:
+            pass            # never block the rotation
         threading.Timer(30.0, self._clear_pending_rotation, args=(nxt,)).start()
         return True
 

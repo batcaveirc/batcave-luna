@@ -14,6 +14,14 @@ on:
     - cron: '*/15 * * * *'
   workflow_dispatch: {}
 
+# Minimum needed for actions/checkout; actions:write is NOT granted here on
+# purpose. Self-restart uses GH_PAT (PAT with 'workflow' scope) because the
+# workflow's own GITHUB_TOKEN cannot trigger new workflow runs (GitHub's
+# recursion guard). If GH_PAT is unset, _dispatch_successor() no-ops and the
+# cron is the backstop — same behaviour as before Phase 1.
+permissions:
+  contents: read
+
 # One Luna at a time. The cron (schedule) must NOT kill a running bot — the new
 # run waits and takes over when the current one hits its timeout below, giving
 # continuous coverage with a handoff every ~5.8h. But a PUSH is a deploy: it
@@ -85,6 +93,10 @@ jobs:
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'gemini-flash-latest' }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free' }}
+          # Phase 1 self-restart. PAT with 'workflow' scope; empty = no-op (cron
+          # backstop keeps working). GITHUB_TOKEN cannot trigger new runs.
+          # GITHUB_REPOSITORY is already set automatically by Actions.
+          GH_PAT: ${{ secrets.GH_PAT }}
 
           # ── IRC: plain defaults so a missing secret can never stop the bot.
           #    IRC_CHANNEL defaults to the emoji room Luna lives in. ────────
