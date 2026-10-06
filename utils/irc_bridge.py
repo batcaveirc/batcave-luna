@@ -2323,6 +2323,41 @@ class IRCBridge:
         self._nick_times.append(now)
         return True
 
+    # Protective shield: hard cap on outbound rate so a loop that calls _raw
+    # tightly can never flood-kill the bot. Dracula has a 2 lines/sec pacer;
+    # Luna had NOTHING between code and server. HybridIRC's RecvQ limit is
+    # roughly 10 lines/sec sustained — the 2026-10-06 Carfax drop proved it.
+    # Everyday traffic is well under the cap; a dropped non-protocol line is
+    # survivable, a server flood-kill is not.
+    _FLOOD_LIMIT = 10
+    _FLOOD_WINDOW_SEC = 1.0
+    _FLOOD_EXEMPT = ("PING", "PONG", "QUIT")
+
     def _raw(self, msg: str):
-        if self._sock:
+        if not self._sock:
+            return
+        try:
+            # PING/PONG/QUIT bypass the cap: the protocol requires them to go
+            # through promptly, and they are small, bounded and self-driven
+            # so they can never themselves be the source of a flood.
+            up = (msg or "").lstrip().upper()
+            if not up.startswith(self._FLOOD_EXEMPT):
+                now = time.time()
+                recent = getattr(self, "_recent_sends", None)
+                if recent is None:
+                    recent = []
+                    self._recent_sends = recent
+                # In-place prune of entries past the window.
+                cutoff = now - self._FLOOD_WINDOW_SEC
+                while recent and recent[0] < cutoff:
+                    recent.pop(0)
+                if len(recent) >= self._FLOOD_LIMIT:
+                    # One warning per shed, so a surge is visible in logs but
+                    # does not become its own flood of warnings.
+                    print(f"[irc_bridge] ★ FLOOD SHIELD dropped: {msg[:60]}... "
+                          f"(cap {self._FLOOD_LIMIT}/{self._FLOOD_WINDOW_SEC}s)")
+                    return
+                recent.append(now)
             self._sock.sendall(f"{msg}\r\n".encode("utf-8"))
+        except Exception as e:  # noqa: BLE001 — never let an outbound error kill the bridge
+            print(f"[irc_bridge] _raw send error: {e}")

@@ -163,6 +163,47 @@ b._remember_line("priya", "the dinner was delicious tonight", room="#batcave")
 saw_home = [l for l in b._raw_log if "::saw " in l]
 c("home-channel ::saw IS broadcast", len(saw_home) == 1, "\n".join(b._raw_log))
 
+print("\n— flood shield: _raw caps non-protocol writes at 10/s, drops excess —")
+# Not through _remember_line or ::saw — directly through _raw, so this proves
+# the shield covers EVERY outbound code path, including any future one.
+#
+# The _make_bridge stub replaces _raw with a logging lambda; for THIS test
+# we want the REAL class method so the shield actually runs.
+import types
+b = _make_bridge()
+b._raw = types.MethodType(_ib.IRCBridge._raw, b)
+b._recent_sends = []
+sent_raw = []
+class _StubSock:
+    def sendall(self, data):
+        sent_raw.append(data.decode("utf-8", errors="replace"))
+b._sock = _StubSock()
+# A tight burst: 25 non-protocol lines in one go.
+for i in range(25):
+    b._raw(f"PRIVMSG #batcave :spam line {i}")
+c("flood shield caps writes at _FLOOD_LIMIT per window",
+  len(sent_raw) <= 10, f"wrote {len(sent_raw)}; cap is 10")
+# PING must ALWAYS go through, even after the cap trips, or we lose the
+# connection to a ping-timeout.
+sent_raw.clear()
+b._raw("PING :server.example")
+c("PING bypasses the flood cap (would otherwise lose ping-timeout)",
+  len(sent_raw) == 1, f"wrote {len(sent_raw)}")
+# QUIT bypasses too, so SIGTERM goodbye always lands.
+sent_raw.clear()
+b._raw("QUIT :leaving cleanly")
+c("QUIT bypasses the flood cap", len(sent_raw) == 1)
+# A disconnect mid-send must not crash the bridge.
+class _BrokenSock:
+    def sendall(self, data):
+        raise ConnectionResetError("peer went away")
+b._sock = _BrokenSock()
+try:
+    b._raw("PRIVMSG #batcave :this would raise")
+    c("_raw survives a mid-send socket exception", True)
+except Exception as exc:
+    c("_raw survives a mid-send socket exception", False, str(exc))
+
 print("\n— rate-limit: >20 ::saw in 60s drops the excess —")
 b = _make_bridge()
 _ib.TRUST_CHANNEL = "#batcave-trust"
