@@ -101,6 +101,11 @@ jobs:
           # channel moves or the heartbeat cadence needs tuning.
           IRC_TRUST_CHANNEL: ${{ secrets.IRC_TRUST_CHANNEL || '#batcave-trust' }}
           TRUST_HB_MS: ${{ secrets.TRUST_HB_MS || '180000' }}
+          # Shadow rooms: rooms Luna JOINS SILENTLY on behalf of Dracula where
+          # Dracula is banned. Never speaks there — just reads, remembers, and
+          # broadcasts ::saw via the trust channel so Dracula gets the view.
+          # Owner-curated allowlist ONLY (comma-separated). Empty = feature off.
+          LUNA_SHADOW_ROOMS: ${{ secrets.LUNA_SHADOW_ROOMS }}
 
           # ── IRC: plain defaults so a missing secret can never stop the bot.
           #    IRC_CHANNEL defaults to the emoji room Luna lives in. ────────

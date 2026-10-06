@@ -283,6 +283,17 @@ class IRCBridge:
             (c if c.startswith("#") else f"#{c}")
             for c in os.getenv("IRC_FOLLOW_ROOMS", "").split(",") if c.strip()
         }
+        # Shadow rooms: rooms Luna joins SILENTLY to serve as Dracula's eyes
+        # where Dracula is banned. She NEVER speaks or relays from them — she
+        # just reads, remembers, and broadcasts ::saw via the trust channel so
+        # Dracula gets the view it can't get itself. Owner-curated allowlist
+        # ONLY (never auto-discovered) so a prank JOIN can't drag her into a
+        # hostile room. Bounded on purpose: the 20/60s ::saw rate cap keeps
+        # the trust channel from flooding even if a shadow room is busy.
+        self._shadow: Set[str] = {
+            (c if c.startswith("#") else f"#{c}").lower()
+            for c in os.getenv("LUNA_SHADOW_ROOMS", "").split(",") if c.strip()
+        }
         self._last_activity: Dict[str, float] = {}   # irc_ch -> ts of last line seen
         # Speak only where she is an operator. The owner: "make sure my bots dont
         # message anything in other rooms except the rooms they are a mod." ON by
@@ -629,7 +640,7 @@ class IRCBridge:
         # "RecvQ exceeded" (Carfax saw this live on 2026-10-06). Home-channel
         # sync is where it matters anyway: that is the one room both bots are
         # in. Rate-limited as a safety net.
-        if source != "remote" and self._is_home_channel(room) and self._trust_broadcast_ok():
+        if source != "remote" and self._should_broadcast(room) and self._trust_broadcast_ok():
             try:
                 self._trust_send("saw", {"n": n, "m": txt[:200], "r": room or "#batcave", "t": int(t or now)})
             except Exception:
@@ -650,6 +661,16 @@ class IRCBridge:
             return r in {c.lower() for c in self.all_channels()}
         except Exception:
             return False
+
+    def _should_broadcast(self, room: str) -> bool:
+        """Where ::saw broadcasts are worth it. Home channels (bots are both
+        in #batcave anyway, this syncs their views on drift) AND shadow rooms
+        (Dracula is NOT in them — she is their only path to a view). Recruit
+        rooms stay local-only, since Dracula sees them itself and amplifying
+        every busy room was what killed Carfax with RecvQ exceeded."""
+        if self._is_home_channel(room):
+            return True
+        return (room or "").lower() in self._shadow
 
     def _trust_broadcast_ok(self) -> bool:
         """20 ::saw broadcasts per 60s. Heartbeat is not metered — it is one
@@ -1559,6 +1580,11 @@ class IRCBridge:
                 for ch in self._follow:
                     self._raw(f"JOIN {ch}")
                     self._last_activity[ch.lower()] = time.time()
+            # Shadow rooms: silent observer for Dracula's benefit. JOIN only,
+            # never speak. Follow-sweep is told to leave them alone.
+            for sh in self._shadow:
+                self._raw(f"JOIN {sh}")
+                self._last_activity[sh.lower()] = time.time()
             # Phase 2: team up with the other bot on the trust channel. Delayed
             # so it does not fight for pacer budget with the opening JOINs.
             try:

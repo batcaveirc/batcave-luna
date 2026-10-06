@@ -48,6 +48,7 @@ def _make_bridge():
     b._user_memory_lock = threading.Lock()
     b._partner_last_seen = 0.0
     b._trust_hb_timer = None
+    b._shadow = set()                      # default: no shadow rooms
     b._raw_log = []
     b._raw = lambda line: b._raw_log.append(line)
     b.is_one_of_ours = lambda nick: nick.lower() in {"andromeda", "darkcloud", "nosferatu"}
@@ -140,6 +141,28 @@ b._handle_trust_line("DarkCloud",
     '::saw {"n":"priya","m":"the restaurant on 5th street was lovely","r":"#batcave","t":1}')
 got = b._user_memory.get("priya", [])
 c("one entry, not two (deduped by nick+text)", len(got) == 1, f"got {len(got)}")
+
+print("\n— shadow rooms: Luna is Dracula's eyes where he is banned —")
+# When Luna is in a room Dracula can't enter, her captures from THAT room
+# must still reach Dracula via ::saw — recruit rooms stay local-only, but
+# shadow rooms are the exception. Owner-curated allowlist.
+b = _make_bridge()
+b._shadow = {"#dracula-banned"}
+_ib.TRUST_CHANNEL = "#batcave-trust"
+# Capture a line in the shadow room — this is the whole point of shadow rooms.
+b._remember_line("some_user", "they were saying things about hazel earlier",
+                 room="#dracula-banned")
+saw_shadow = [l for l in b._raw_log if "::saw " in l]
+c("shadow-room capture DOES broadcast ::saw (Dracula's only path to this view)",
+  len(saw_shadow) == 1, "\n".join(b._raw_log))
+# A random non-shadow non-home room still stays local (recv-queue safety).
+b2 = _make_bridge()
+b2._shadow = set()
+b2._remember_line("someone", "random chatter in a passthrough room",
+                  room="#chatindian")
+saw_other = [l for l in b2._raw_log if "::saw " in l]
+c("non-shadow, non-home room captures still stay LOCAL (no broadcast)",
+  not saw_other, "\n".join(b2._raw_log))
 
 print("\n— cross-room: a line in a recruit room is captured and tagged —")
 b = _make_bridge()
