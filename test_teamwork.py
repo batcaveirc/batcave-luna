@@ -147,6 +147,29 @@ b._remember_line("rinki", "I think I will skip dinner tonight actually", room="#
 got = b._user_memory.get("rinki", [])
 c("cross-room line stored", len(got) == 1)
 c("room tag preserved", got and got[0].get("room") == "#chatindian")
+# ★ THE RECV-Q FIX: recruit-room captures must NOT broadcast ::saw. The
+# incident on 2026-10-06 was Carfax dropping with "RecvQ exceeded" because
+# every notable line in every busy recruit room was amplifying onto one
+# trust channel.
+saw_cross = [l for l in b._raw_log if "::saw " in l]
+c("cross-room capture does NOT broadcast ::saw (recv-queue safety)",
+  not saw_cross, "\n".join(b._raw_log))
+
+print("\n— home-channel capture DOES broadcast ::saw —")
+b = _make_bridge()
+_ib.TRUST_CHANNEL = "#batcave-trust"
+# IRC_CHANNEL defaults to "#BatCave"; _is_home_channel("#batcave") is True.
+b._remember_line("priya", "the dinner was delicious tonight", room="#batcave")
+saw_home = [l for l in b._raw_log if "::saw " in l]
+c("home-channel ::saw IS broadcast", len(saw_home) == 1, "\n".join(b._raw_log))
+
+print("\n— rate-limit: >20 ::saw in 60s drops the excess —")
+b = _make_bridge()
+_ib.TRUST_CHANNEL = "#batcave-trust"
+for i in range(30):
+    b._remember_line(f"speaker{i}", f"line number {i} with enough chars", room="#batcave")
+saw_rate = [l for l in b._raw_log if "::saw " in l]
+c("at most 20 ::saw broadcasts in a burst", len(saw_rate) == 20, f"broadcast {len(saw_rate)}")
 # But the PROMPT must not reveal the room — that would blow the "sentient" feel.
 prompt_text = b._memory_for("rinki")
 # memoryFor drops the last line (which is the one we just added), so empty is correct here

@@ -623,13 +623,48 @@ class IRCBridge:
             lst.append({"t": t or now, "text": txt[:200], "room": room or "#batcave"})
             while len(lst) > _MEMORY_MAX_PER_USER:
                 lst.pop(0)
-        # Share with the partner so both bots have the same view. Local calls
-        # broadcast; remote calls (already somebody else's broadcast) do not.
-        if source != "remote":
+        # Share with the partner — but ONLY for the home channel. Broadcasting
+        # every notable line from EVERY room to #batcave-trust amplifies many
+        # rooms' chatter onto one channel and the SERVER flood-kills us with
+        # "RecvQ exceeded" (Carfax saw this live on 2026-10-06). Home-channel
+        # sync is where it matters anyway: that is the one room both bots are
+        # in. Rate-limited as a safety net.
+        if source != "remote" and self._is_home_channel(room) and self._trust_broadcast_ok():
             try:
                 self._trust_send("saw", {"n": n, "m": txt[:200], "r": room or "#batcave", "t": int(t or now)})
             except Exception:
                 pass            # never block the chat path
+
+    def _is_home_channel(self, room: str) -> bool:
+        """True for the home room (and any directly-bridged rooms via
+        all_channels). False for recruit rooms, follow rooms, trust. The point
+        is that only home-channel captures are worth broadcasting; everything
+        else stays local."""
+        r = (room or "").lower()
+        if not r:
+            return True
+        home = (config.IRC_CHANNEL or "#batcave").split(",")[0].strip().lower()
+        if r == home:
+            return True
+        try:
+            return r in {c.lower() for c in self.all_channels()}
+        except Exception:
+            return False
+
+    def _trust_broadcast_ok(self) -> bool:
+        """20 ::saw broadcasts per 60s. Heartbeat is not metered — it is one
+        line per 3 min and cannot flood."""
+        now = time.time()
+        history = getattr(self, "_trust_broadcast_history", None)
+        if history is None:
+            history = []
+            self._trust_broadcast_history = history
+        while history and now - history[0] > 60.0:
+            history.pop(0)
+        if len(history) >= 20:
+            return False
+        history.append(now)
+        return True
 
     def _prune_memory(self) -> None:
         """Hourly: drop entries past TTL and users emptied by it. Reschedules."""
