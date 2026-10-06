@@ -117,6 +117,67 @@ c("self heartbeat ignored", b._partner_last_seen == 0.0, str(b._partner_last_see
 b._handle_trust_line("DarkCloud", '::hb {"n":"DarkCloud","t":1759000005}')
 c("partner heartbeat recorded", b._partner_last_seen > 0, str(b._partner_last_seen))
 
+print("\n— ::saw merges partner's observation into local memory —")
+b = _make_bridge()
+_ib.TRUST_CHANNEL = "#batcave-trust"
+# Dracula saw a line and broadcast ::saw; Luna receives and merges.
+b._handle_trust_line("DarkCloud",
+    '::saw {"n":"shweta0","m":"my knee is better today, thanks","r":"#batcave","t":1759000050}')
+got = b._user_memory.get("shweta0", [])
+c("remote ::saw stored in local memory", len(got) == 1, f"got {len(got)}")
+c("room tagged (for diagnostics)", got and got[0].get("room") == "#batcave")
+# Must NOT broadcast ::saw back out — that would loop forever.
+saw_broadcasts = [l for l in b._raw_log if "::saw " in l]
+c("remote ::saw does NOT re-broadcast (loop guard)", not saw_broadcasts, "\n".join(b._raw_log))
+
+print("\n— dedupe: a locally captured line and its ::saw echo coalesce —")
+b = _make_bridge()
+_ib.TRUST_CHANNEL = "#batcave-trust"
+# Local capture
+b._remember_line("priya", "the restaurant on 5th street was lovely")
+# Partner echoes back the same line as ::saw (we see our own hb/saw echo too)
+b._handle_trust_line("DarkCloud",
+    '::saw {"n":"priya","m":"the restaurant on 5th street was lovely","r":"#batcave","t":1}')
+got = b._user_memory.get("priya", [])
+c("one entry, not two (deduped by nick+text)", len(got) == 1, f"got {len(got)}")
+
+print("\n— cross-room: a line in a recruit room is captured and tagged —")
+b = _make_bridge()
+b._remember_line("rinki", "I think I will skip dinner tonight actually", room="#chatindian")
+got = b._user_memory.get("rinki", [])
+c("cross-room line stored", len(got) == 1)
+c("room tag preserved", got and got[0].get("room") == "#chatindian")
+# But the PROMPT must not reveal the room — that would blow the "sentient" feel.
+prompt_text = b._memory_for("rinki")
+# memoryFor drops the last line (which is the one we just added), so empty is correct here
+c("one-entry memory presents nothing older yet (last line is the live one)", prompt_text == "", repr(prompt_text))
+# Add two more to force the oldest into the recall window.
+b._remember_line("rinki", "yesterday was long, might sleep in", room="#chatindian")
+b._remember_line("rinki", "ok heading out for a bit, bbl", room="#batcave")
+prompt_text = b._memory_for("rinki")
+c("recall is non-empty with older lines", bool(prompt_text))
+c("recall does NOT reveal the room — model gets content only",
+  "#chatindian" not in prompt_text and "#batcave" not in prompt_text
+  and "#chatfellas" not in prompt_text, prompt_text)
+
+print("\n— _prune_memory drops TTL-expired entries and empty-user rings —")
+b = _make_bridge()
+# Expired entry (set _MEMORY_TTL_SEC to a short window via the module const)
+import importlib
+# os.environ already set MEMORY_TTL_MS=2000 so TTL_SEC is 2.
+with b._user_memory_lock:
+    b._user_memory["ghost"] = [{"t": time.time() - 10.0, "text": "old line that is now expired", "room": "#batcave"}]
+    b._user_memory["live"] = [{"t": time.time(), "text": "something recent", "room": "#batcave"}]
+# Monkey-patch threading.Timer so pruning does NOT reschedule in the test
+_real_timer = __import__("threading").Timer
+__import__("threading").Timer = lambda *a, **k: type("T", (), {"daemon": True, "start": lambda s: None})()
+try:
+    b._prune_memory()
+finally:
+    __import__("threading").Timer = _real_timer
+c("expired user dropped entirely", "ghost" not in b._user_memory)
+c("live user kept", "live" in b._user_memory)
+
 print("\n— trust protocol: non-'::' chatter is ignored on purpose —")
 b = _make_bridge()
 b._handle_trust_line("Vikram", "hey can you confirm you are up?")
@@ -130,7 +191,7 @@ print("\n— _trust_send writes a compact JSON line to TRUST_CHANNEL —")
 b = _make_bridge()
 # TRUST_CHANNEL is a module-level const; snapshot and verify
 import utils.irc_bridge as _ib2
-_ib2.TRUST_CHANNEL = "#batcave-trust"
+_ib.TRUST_CHANNEL = "#batcave-trust"
 b._trust_send("hb", {"n": "Andromeda", "t": 1759000000})
 sent = [l for l in b._raw_log if l.startswith("PRIVMSG #batcave-trust")]
 c("sent exactly one line", len(sent) == 1, "\n".join(b._raw_log))

@@ -581,7 +581,12 @@ class IRCBridge:
             return self._topics.get(ch)
 
     # ── Phase 3: per-user memory of #batcave ───────────────────────────
-    def _remember_line(self, nick: str, text: str) -> None:
+    def _remember_line(self, nick: str, text: str, room: str = "", source: str = "local", t: float = 0.0) -> None:
+        """Capture a notable line. Local calls broadcast ::saw; remote (::saw
+        from the partner) do not, to stop echo storms. Dedupe is a 60s window
+        on nick+text so a line we captured locally AND received as ::saw
+        coalesces to one memory entry.
+        """
         n = (nick or "").lower()
         if not n or n == (self._nick or "").lower():
             return
@@ -590,20 +595,71 @@ class IRCBridge:
                 return
         except Exception:
             pass
-        t = (text or "").strip()
-        if len(t) < _MEMORY_MIN_LEN:
+        txt = (text or "").strip()
+        if len(txt) < _MEMORY_MIN_LEN:
             return
-        if t.startswith(("$", "!!", ".")):
+        if txt.startswith(("$", "!!", ".")):
             return
-        if t.startswith("http://") or t.startswith("https://"):
-            # URL-only lines are not personal "about them".
-            if " " not in t:
-                return
+        if (txt.startswith("http://") or txt.startswith("https://")) and " " not in txt:
+            return
+        now = time.time()
+        key = f"{n}|{txt[:80].lower()}"
+        # Dedupe map lives on self (threadsafe through the memory lock).
         with self._user_memory_lock:
+            saw = getattr(self, "_saw_recently", None)
+            if saw is None:
+                saw = {}
+                self._saw_recently = saw
+            if now - saw.get(key, 0.0) < 60.0:
+                return
+            saw[key] = now
+            if len(saw) > 500:
+                stale = [k for k, ts in saw.items() if now - ts > 300.0]
+                for k in stale:
+                    saw.pop(k, None)
             lst = self._user_memory.setdefault(n, [])
-            lst.append({"t": time.time(), "text": t[:200]})
+            # Room is stored for diagnostics; the prompt does NOT reveal it,
+            # so the bot does not announce "I heard you in #desilivechat.com".
+            lst.append({"t": t or now, "text": txt[:200], "room": room or "#batcave"})
             while len(lst) > _MEMORY_MAX_PER_USER:
                 lst.pop(0)
+        # Share with the partner so both bots have the same view. Local calls
+        # broadcast; remote calls (already somebody else's broadcast) do not.
+        if source != "remote":
+            try:
+                self._trust_send("saw", {"n": n, "m": txt[:200], "r": room or "#batcave", "t": int(t or now)})
+            except Exception:
+                pass            # never block the chat path
+
+    def _prune_memory(self) -> None:
+        """Hourly: drop entries past TTL and users emptied by it. Reschedules."""
+        now = time.time()
+        dropped_users = 0
+        dropped_lines = 0
+        with self._user_memory_lock:
+            empties = []
+            for n, arr in self._user_memory.items():
+                fresh = [e for e in arr if now - e["t"] <= _MEMORY_TTL_SEC]
+                if not fresh:
+                    empties.append(n)
+                    dropped_lines += len(arr)
+                elif len(fresh) != len(arr):
+                    dropped_lines += (len(arr) - len(fresh))
+                    self._user_memory[n] = fresh
+                    dropped_users += 1
+            for n in empties:
+                self._user_memory.pop(n, None)
+            saw = getattr(self, "_saw_recently", None)
+            if saw:
+                for k in [k for k, ts in saw.items() if now - ts > 300.0]:
+                    saw.pop(k, None)
+        if dropped_lines:
+            print(f"[irc_bridge] memory prune: dropped {dropped_lines} old lines across {dropped_users} users "
+                  f"(kept {len(self._user_memory)} users)")
+        # Reschedule
+        t = threading.Timer(3600.0, self._prune_memory)
+        t.daemon = True
+        t.start()
 
     def _memory_for(self, nick: str) -> str:
         """Return a formatted recall block for the prompt, or '' if empty.
@@ -666,7 +722,24 @@ class IRCBridge:
             n = str(data.get("n", "")).lower()
             if n and n != (self._nick or "").lower():
                 self._partner_last_seen = time.time()
-        # Reserved for later cross-sync phases: ::saw ::act ::mem
+            return
+        if verb == "saw":
+            # Partner saw a line; merge with source=remote so we do NOT loop.
+            # Dedupe inside _remember_line coalesces this with our own capture.
+            n = data.get("n", "")
+            m = data.get("m", "")
+            if n and m:
+                try:
+                    self._remember_line(
+                        n, m,
+                        room=str(data.get("r") or "#batcave"),
+                        source="remote",
+                        t=float(data.get("t") or time.time()),
+                    )
+                except Exception as e:  # noqa: BLE001 — never block trust path
+                    print(f"[irc_bridge] ::saw merge error: {e}")
+            return
+        # Reserved for later: ::act (moderation taken), ::mem (full-sync pulls)
 
     def partner_is_silent(self) -> bool:
         return self._partner_last_seen > 0 and (time.time() - self._partner_last_seen) > _PARTNER_SILENT_SEC
@@ -696,6 +769,11 @@ class IRCBridge:
         self._trust_hb_timer = threading.Timer(15.0, _beat)
         self._trust_hb_timer.daemon = True
         self._trust_hb_timer.start()
+        # Memory GC: hourly from here on. Idempotent — if someone restarts
+        # teamwork, we just reschedule and the old timer fires once more.
+        t = threading.Timer(3600.0, self._prune_memory)
+        t.daemon = True
+        t.start()
 
     def ask_luna(self, irc_ch: str, nick: str, prompt: str) -> bool:
         """Answer someone in the channel, using the Discord loop for the call.
@@ -729,7 +807,7 @@ class IRCBridge:
         memory = self._memory_for(nick)
         if memory:
             context = (context + "\n\n" if context else "") \
-                + f"What {nick} has said in #batcave recently (you remember):\n{memory}"
+                + f"What {nick} has said recently (you remember them from this and nearby rooms):\n{memory}"
 
         def _done(fut):
             try:
@@ -1690,13 +1768,15 @@ class IRCBridge:
             buf = self._recent.setdefault(target.lower(), deque(maxlen=_RECENT_LINES))
             buf.append((nick, message[:300]))
             self._last_activity[target.lower()] = time.time()
-            # Phase 3: per-user memory for #batcave only (home channel).
-            # Recruit rooms / followed rooms are NOT scanned for memory — the
-            # bot's "sentient recall" is only of this room, not surveillance.
+            # Phase 3: per-user memory. Capture from any room this bot is in
+            # (the operator is their delegate there, so lines are already in
+            # their reach), tagged by room. The trust channel is excluded —
+            # it is the inter-bot protocol, not people talking. The prompt
+            # does NOT reveal the room, so a reference reads as remembered
+            # content, not "I heard you in room X".
             try:
-                home = (config.IRC_CHANNEL or "#batcave").split(",")[0].strip().lower()
-                if target.lower() == home:
-                    self._remember_line(nick, message)
+                if target.startswith("#") and target.lower() != (TRUST_CHANNEL or "").lower():
+                    self._remember_line(nick, message, room=target)
             except Exception as e:  # noqa: BLE001 — memory must never break chat
                 print(f"[irc_bridge] memory error: {e}")
             # A live trivia line? Check it before anything else consumes the msg.
