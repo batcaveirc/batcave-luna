@@ -58,6 +58,13 @@ BATBOT_REPLIT_PROJECT = os.getenv("BATBOT_REPLIT_PROJECT", "")
 # BatBot's IRC nick to watch for in #BatCave
 BATBOT_IRC_NICK       = os.getenv("BATBOT_IRC_NICK", "Vampire")
 
+# Owner-set 2026-10-07: a dedicated Discord channel that mirrors chatter from
+# every IRC room Luna is in that is NOT a home room — recruit rooms, shadow
+# rooms, follow rooms. Rate-limited per source room (6 lines/60s) so a busy
+# recruit room cannot flood Discord. Empty = feature off (bot does not pipe
+# non-home chatter anywhere; watch alerts still go to the home channels).
+LUNA_ADMIN_CHANNEL    = os.getenv("LUNA_ADMIN_CHANNEL", "")
+
 # ── Nick rotation ────────────────────────────────────────────────────────────
 # Off unless switched on, and it does nothing without a pool: the names the bots
 # wear are the owner's to choose. The cap, not the interval, is the safety

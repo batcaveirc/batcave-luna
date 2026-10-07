@@ -178,13 +178,16 @@ saw_cross = [l for l in b._raw_log if "::saw " in l]
 c("cross-room capture does NOT broadcast ::saw (recv-queue safety)",
   not saw_cross, "\n".join(b._raw_log))
 
-print("\n— home-channel capture DOES broadcast ::saw —")
+print("\n— home-channel capture does NOT broadcast ::saw (owner shrink 2026-10-07) —")
+# Dracula and Luna are BOTH in #batcave, so each sees the other's home-channel
+# lines directly. ::saw from home was pure noise on #batcave-trust. Dropped.
+# The one broadcast path that remains is shadow-room (Dracula can't be there).
 b = _make_bridge()
 _ib.TRUST_CHANNEL = "#batcave-trust"
-# IRC_CHANNEL defaults to "#BatCave"; _is_home_channel("#batcave") is True.
 b._remember_line("priya", "the dinner was delicious tonight", room="#batcave")
 saw_home = [l for l in b._raw_log if "::saw " in l]
-c("home-channel ::saw IS broadcast", len(saw_home) == 1, "\n".join(b._raw_log))
+c("home-channel ::saw is NOT broadcast (redundant with direct visibility)",
+  len(saw_home) == 0, "\n".join(b._raw_log))
 
 print("\n— flood shield: _raw caps non-protocol writes at 10/s, drops excess —")
 # Not through _remember_line or ::saw — directly through _raw, so this proves
@@ -227,13 +230,18 @@ try:
 except Exception as exc:
     c("_raw survives a mid-send socket exception", False, str(exc))
 
-print("\n— rate-limit: >20 ::saw in 60s drops the excess —")
+print("\n— rate-limit still applies to shadow-room ::saw as a safety net —")
+# After the owner shrink, home-channel ::saw is off. The rate limit now
+# guards the ONE remaining broadcast path: shadow rooms. 30 shadow lines
+# in a burst → still capped at 20 so #batcave-trust can't flood.
 b = _make_bridge()
+b._shadow = {"#busy-shadow"}
 _ib.TRUST_CHANNEL = "#batcave-trust"
 for i in range(30):
-    b._remember_line(f"speaker{i}", f"line number {i} with enough chars", room="#batcave")
+    b._remember_line(f"speaker{i}", f"line number {i} with enough chars", room="#busy-shadow")
 saw_rate = [l for l in b._raw_log if "::saw " in l]
-c("at most 20 ::saw broadcasts in a burst", len(saw_rate) == 20, f"broadcast {len(saw_rate)}")
+c("at most 20 ::saw broadcasts in a burst (cap enforced on shadow too)",
+  len(saw_rate) == 20, f"broadcast {len(saw_rate)}")
 # But the PROMPT must not reveal the room — that would blow the "sentient" feel.
 prompt_text = b._memory_for("rinki")
 # memoryFor drops the last line (which is the one we just added), so empty is correct here

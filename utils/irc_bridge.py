@@ -640,13 +640,13 @@ class IRCBridge:
             lst.append({"t": t or now, "text": txt[:200], "room": room or "#batcave"})
             while len(lst) > _MEMORY_MAX_PER_USER:
                 lst.pop(0)
-        # Share with the partner — but ONLY for the home channel. Broadcasting
-        # every notable line from EVERY room to #batcave-trust amplifies many
-        # rooms' chatter onto one channel and the SERVER flood-kills us with
-        # "RecvQ exceeded" (Carfax saw this live on 2026-10-06). Home-channel
-        # sync is where it matters anyway: that is the one room both bots are
-        # in. Rate-limited as a safety net.
-        if source != "remote" and self._should_broadcast(room) and self._trust_broadcast_ok():
+        # Share with the partner — ONLY for shadow rooms. Owner shrink
+        # 2026-10-07: Dracula is in #batcave too and sees home-channel lines
+        # directly, so home ::saw was redundant noise on #batcave-trust. The
+        # one place Dracula CAN'T see is Luna's shadow rooms — those captures
+        # are the trust channel's actual load-bearing content now. Rate-
+        # limited as a safety net (Carfax RecvQ-exceeded lesson stands).
+        if source != "remote" and (room or "").lower() in self._shadow and self._trust_broadcast_ok():
             try:
                 self._trust_send("saw", {"n": n, "m": txt[:200], "r": room or "#batcave", "t": int(t or now)})
             except Exception:
@@ -1892,6 +1892,15 @@ class IRCBridge:
                         print(f"[watch] {nick} {heard['why']} in {target}")
                 except Exception as e:  # noqa: BLE001
                     print(f"[irc_bridge] watch error: {e}")
+                # Owner-set 2026-10-07: pipe watcher-room lines to a Discord
+                # ADMIN channel so the owner can scan them from mobile without
+                # being in IRC. Rate-limited per-source-room so one busy room
+                # cannot blow Discord's limits. The trust-channel is for bots;
+                # this is for the human.
+                try:
+                    self._admin_relay(target, nick, message)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[irc_bridge] admin relay error: {e}")
                 return
 
             # ── Channel message ──
@@ -2047,6 +2056,40 @@ class IRCBridge:
             ),
             self.loop,
         )
+
+    # ── Admin relay (owner-visible mirror of non-home room chatter) ────────
+    def _admin_relay(self, source_room: str, nick: str, message: str) -> None:
+        """Pipe a watcher-room line to a dedicated Discord admin channel so
+        the owner can scan non-home IRC traffic from mobile. Rate-limited
+        per-source-room (6 lines / 60s per room): more than that is unreadable
+        on mobile and would blow Discord's rate limits with a busy recruit
+        room. Owner-set 2026-10-07; dormant if LUNA_ADMIN_CHANNEL is empty."""
+        admin_ch = (getattr(config, "LUNA_ADMIN_CHANNEL", "") or "").strip()
+        if not admin_ch:
+            return                             # feature off
+        now = time.time()
+        history = getattr(self, "_admin_relay_history", None)
+        if history is None:
+            history = {}                       # source_room(lower) -> [ts, ts]
+            self._admin_relay_history = history
+        key = (source_room or "").lower()
+        recent = [t for t in history.get(key, []) if now - t < 60.0]
+        if len(recent) >= 6:
+            return                             # busy room, drop silently
+        recent.append(now)
+        history[key] = recent
+        # Keep the map bounded so an unbounded number of distinct rooms
+        # cannot grow it forever.
+        if len(history) > 50:
+            for k in list(history)[:25]:
+                history.pop(k, None)
+        # Discord markdown-safe. We truncate to 400 chars because long IRC
+        # lines (quoted blocks, pastes) are unreadable on mobile anyway.
+        text = f"[`{source_room}`] **{nick}**: {(message or '')[:400]}"
+        try:
+            self._relay_to_discord(text, discord_channel=admin_ch)
+        except Exception as e:                 # noqa: BLE001
+            print(f"[irc_bridge] admin relay post error: {e}")
 
     # ── Discord relay ─────────────────────────────────────────────────────────
 

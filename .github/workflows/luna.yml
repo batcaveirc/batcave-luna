@@ -106,6 +106,10 @@ jobs:
           # broadcasts ::saw via the trust channel so Dracula gets the view.
           # Owner-curated allowlist ONLY (comma-separated). Empty = feature off.
           LUNA_SHADOW_ROOMS: ${{ secrets.LUNA_SHADOW_ROOMS }}
+          # Admin relay: a Discord channel that mirrors every IRC watcher-room
+          # line (recruit, shadow, follow) so owner can scan on mobile without
+          # being on IRC. Rate-limited per source room (6/60s). Dormant if empty.
+          LUNA_ADMIN_CHANNEL: ${{ secrets.LUNA_ADMIN_CHANNEL }}
 
           # ── IRC: plain defaults so a missing secret can never stop the bot.
           #    IRC_CHANNEL defaults to the emoji room Luna lives in. ────────
