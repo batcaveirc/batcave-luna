@@ -1582,6 +1582,16 @@ class IRCBridge:
                     self._last_activity[ch.lower()] = time.time()
             # Shadow rooms: silent observer for Dracula's benefit. JOIN only,
             # never speak. Follow-sweep is told to leave them alone.
+            # Diagnostic log: owner reported "I don't see Luna in those rooms"
+            # 2026-10-06; previous run's log was already purged so we could
+            # not verify. Log what we are trying to join so next session has
+            # evidence either way.
+            if self._shadow:
+                print(f"[irc_bridge] Shadow rooms: joining {len(self._shadow)} "
+                      f"silently → {sorted(self._shadow)}", flush=True)
+            else:
+                print("[irc_bridge] Shadow rooms: none configured (LUNA_SHADOW_ROOMS empty).",
+                      flush=True)
             for sh in self._shadow:
                 self._raw(f"JOIN {sh}")
                 self._last_activity[sh.lower()] = time.time()
