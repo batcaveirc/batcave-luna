@@ -1356,6 +1356,15 @@ class IRCBridge:
                     # The address is blocked for this runner's whole life, so a
                     # fresh run with a fresh address is the only cure. Hard exit
                     # (ends the process and the job) the way Dracula's does.
+                    # Dispatch a successor BEFORE the hard exit so GitHub's
+                    # throttled cron doesn't leave the room bot-less for hours
+                    # — observed live 2026-10-07, Dracula's equivalent branch
+                    # fired and nothing restarted for 4+ hours before this fix.
+                    try:
+                        from utils.self_restart import dispatch_successor
+                        dispatch_successor("blocked-address-exit", workflow_file="luna.yml")
+                    except Exception as _derr:  # noqa: BLE001
+                        print(f"[irc_bridge] dispatch on exit failed: {_derr}", flush=True)
                     import os
                     os._exit(1)
             if not self._running:
