@@ -257,7 +257,13 @@ class IRCBridge:
         self._trust_loaded = False
         self._trust_asked = 0.0
         self._rotations_at = []
-        self._last_rotate = 0.0
+        # If connect-time nick variation is on, suppress the immediate
+        # first-tick rotation by setting _last_rotate to NOW (so the first
+        # tick's delta is 0 and the interval gate holds the rotation back
+        # until a full IRC_NICK_ROTATE_MIN has passed). Each run has already
+        # picked a varied starting nick in config, so another rename at
+        # startup is exactly the visible mid-run change we want to avoid.
+        self._last_rotate = time.time() if getattr(config, "IRC_NICK_PICK_AT_CONNECT", False) else 0.0
         self._isupport: Dict[str, str] = {}   # what the server says it supports
         self._ai_cooldown: Dict[str, float] = {}   # nick(lower) -> ts
         # The last few lines per room, so Luna can answer "who was talking"

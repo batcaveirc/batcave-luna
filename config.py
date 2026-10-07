@@ -82,6 +82,19 @@ IRC_DEFAULT_NAMES     = [
     "Nocturne", "Starling", "Nightjar", "Evenfall", "Duskfall", "Moonveil",
 ]
 IRC_NICK_POOL         = [n.strip() for n in os.getenv("IRC_NICK_POOL", "").split(",") if n.strip()]
+# Connect-time nick variation. When ON, each new RUN starts under a random
+# pool name instead of IRC_NICK. The honest alternative to visible mid-run
+# rename: recruit rooms see different Luna nicks JOIN at different times,
+# never "X is now known as Y". Owner can still identify her via /whois
+# (realname + account are stable).
+IRC_NICK_PICK_AT_CONNECT = os.getenv("IRC_NICK_PICK_AT_CONNECT", "").strip().lower() in ("1", "true", "yes", "on")
+if IRC_NICK_PICK_AT_CONNECT:
+    import random as _random
+    _pool = IRC_NICK_POOL or IRC_DEFAULT_NAMES
+    if len(_pool) > 1:
+        _pick = _random.choice(_pool)
+        print(f"[config] Connect-time nick variation: starting as {_pick!r} instead of {IRC_NICK!r}")
+        IRC_NICK = _pick
 # Longest nick the network accepts; over it the NICK is rejected, which looks
 # exactly like the name being taken.
 IRC_NICK_MAXLEN       = max(9, int(os.getenv("IRC_NICK_MAXLEN", "30") or 30))

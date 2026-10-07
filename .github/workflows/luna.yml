@@ -125,6 +125,9 @@ jobs:
           IRC_NICK_ROTATE: ${{ secrets.IRC_NICK_ROTATE || '' }}
           IRC_NICK_POOL: ${{ secrets.IRC_NICK_POOL || '' }}
           IRC_NICK_ROTATE_MIN: ${{ secrets.IRC_NICK_ROTATE_MIN || '240' }}
+          # Connect-time nick variation (parity with Dracula). Each run starts
+          # under a random pool name; the first-tick rotation is suppressed.
+          IRC_NICK_PICK_AT_CONNECT: ${{ secrets.IRC_NICK_PICK_AT_CONNECT || 'off' }}
           IRC_NICK_MAX_PER_HOUR: ${{ secrets.IRC_NICK_MAX_PER_HOUR || '1' }}
           IRC_NICK_MAXLEN: ${{ secrets.IRC_NICK_MAXLEN || '30' }}
           # Vhosts our own bots wear. A vhost belongs to the connection, so this
