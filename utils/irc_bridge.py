@@ -1104,6 +1104,51 @@ class IRCBridge:
         self._trivia_ask(irc_ch, self._trivia.one_off())
         return True
 
+    MEDIA_CMDS = ("image", "img", "picture", "voice", "say", "tts", "speak")
+
+    def try_media_command(self, irc_ch: str, nick: str, text: str) -> bool:
+        """`$image <prompt>` / `$voice <text>` — Pollinations media generation.
+
+        IRC can't display images or play audio inline, so we post a URL that
+        Pollinations serves on-demand. Clients that preview URLs (Kiwi, many
+        others) render the image inline; clicking the audio link plays it in
+        the browser. Discord bridge will embed the image automatically when
+        the URL reaches the mirrored channel. Keyless Pollinations works for
+        both media endpoints; a POLLINATIONS_API_KEY lifts the rate limit if
+        the owner adds one.
+        """
+        import urllib.parse as _up
+        if not text.startswith(config.PREFIX):
+            return False
+        body = text[len(config.PREFIX):].strip()
+        parts = body.split(None, 1)
+        if not parts or parts[0].lower() not in self.MEDIA_CMDS:
+            return False
+        cmd = parts[0].lower()
+        prompt = parts[1].strip() if len(parts) > 1 else ""
+        if not prompt:
+            if cmd in ("image", "img", "picture"):
+                self._notice(nick, f"{config.PREFIX}image <prompt> — generates an image URL")
+            else:
+                self._notice(nick, f"{config.PREFIX}voice <text> — generates a TTS audio URL")
+            return True
+        # Trim overly long prompts; URLs over ~400 chars get truncated by some
+        # IRC bridges and the Pollinations URL still has to carry the query.
+        prompt = prompt[:380]
+        encoded = _up.quote(prompt, safe="")
+        if cmd in ("image", "img", "picture"):
+            seed = random.randint(1, 999_999_999)
+            model = os.getenv("POLLINATIONS_IMAGE_MODEL", "flux").strip() or "flux"
+            url = (f"https://image.pollinations.ai/prompt/{encoded}"
+                   f"?nologo=true&width=768&height=768&seed={seed}&model={model}")
+            self._queue(irc_ch, f"{nick}: {url}")
+        else:  # voice / say / tts / speak
+            voice = os.getenv("POLLINATIONS_VOICE", "alloy").strip() or "alloy"
+            url = (f"https://text.pollinations.ai/{encoded}"
+                   f"?model=openai-audio&voice={voice}")
+            self._queue(irc_ch, f"{nick}: {url}")
+        return True
+
     AI_CMDS = ("ai", "aion", "aioff")
 
     def try_ai_toggle_command(self, irc_ch: str, nick: str, text: str) -> bool:
@@ -2091,6 +2136,8 @@ class IRCBridge:
                     if self.try_trivia_command(target, nick, message):
                         return
                     if self.try_ai_toggle_command(target, nick, message):
+                        return
+                    if self.try_media_command(target, nick, message):
                         return
                     if self.try_nsfw_command(target, nick, message):
                         return
