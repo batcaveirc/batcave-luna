@@ -2511,7 +2511,11 @@ class IRCBridge:
             return False
         if not self._rotation_allowed():
             return False
-        nxt = self._next_rotation_name()
+        # with_number=True so every rotation picks a numbered variant (e.g.
+        # "Selene47" not bare "Selene"). A bare pool name may already belong
+        # to a real registered user; the collision pattern alone got Dracula
+        # G-lined on 2026-10-09 even when IDENTIFY targeted the right account.
+        nxt = self._next_rotation_name(with_number=True)
         if not nxt:
             return False
         # Still subject to the flood ceiling below: two limits that can only

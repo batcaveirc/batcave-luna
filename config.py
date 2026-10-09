@@ -99,7 +99,12 @@ if IRC_NICK_PICK_AT_CONNECT:
     import random as _random
     _pool = IRC_NICK_POOL or IRC_DEFAULT_NAMES
     if len(_pool) > 1:
-        _pick = _random.choice(_pool)
+        # ALWAYS append random digits so our nick cannot collide with a real
+        # registered user who happens to own the pool name. Dracula was
+        # G-lined on 2026-10-09 for picking a bare pool name owned by someone
+        # else; the collision pattern tripped the operator even though our
+        # IDENTIFY targets the correct account. "Mortis47" has no owner.
+        _pick = f"{_random.choice(_pool)}{_random.randint(2, 99)}"
         print(f"[config] Connect-time nick variation: starting as {_pick!r} instead of {IRC_NICK!r}")
         IRC_NICK = _pick
 # Longest nick the network accepts; over it the NICK is rejected, which looks
