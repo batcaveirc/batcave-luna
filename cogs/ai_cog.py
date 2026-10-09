@@ -19,6 +19,7 @@ Two details that are not obvious and have bitten these bots before:
 from __future__ import annotations
 
 import os
+import random
 import re
 
 import aiohttp
@@ -31,8 +32,10 @@ import config
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 # Gemini speaks OpenAI's dialect at this endpoint, so the same payload works.
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-# OpenRouter is OpenAI-native — one key, a shelf of free models.
-OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+# Pollinations — community-run, OpenAI-compatible, keyless or free pk_ key.
+# Replaces the OpenRouter path (retired 2026-10-08). Also exposes image and
+# TTS endpoints we use for the $image / $voice commands.
+POLLINATIONS_API_URL = "https://gen.pollinations.ai/v1/chat/completions"
 REASONING_MIN_TOKENS = 320
 REQUEST_TIMEOUT = 30
 
@@ -67,7 +70,20 @@ SYSTEM_PROMPT = (
     "NEVER invent dialogue. If you cannot recall what someone said and the lines "
     "shown to you do not clearly include it, say so plainly ('I don't remember "
     "exactly') — do NOT make up quotes, imagined scenarios or vampire-themed "
-    "lines. A fabricated quote is a lie, and a bot that lies is useless."
+    "lines. A fabricated quote is a lie, and a bot that lies is useless.\n"
+    "When a FACTS block is shown to you, those lines are TRUE things you know "
+    "right now — your actual rooms, your actual memory of a user, your actual "
+    "status. ALWAYS prefer them over invention. If a question is factual and the "
+    "FACTS block doesn't answer it, say 'I don't know' or 'I haven't seen them' "
+    "plainly — never invent room names, user histories, kicks, bans or quotes.\n"
+    "You know this server's ChanServ grammar from working alongside Dracula: "
+    "SET #chan ENTRYMSG|MLOCK|RESTRICTED|BLOCKBADWORDS|ANTIFLOOD; "
+    "FLAGS #chan <acct> +AFVOio… (A=viewacl F=founder V=autovoice O=autoop "
+    "o=canop i=caninvite); AKICK #chan ADD|DEL|LIST <mask> [reason]; "
+    "mode letters +R=registered-only +m=moderated +n=noexternal +t=topiclock "
+    "+i=inviteonly; InspIRCd banredirect is +b <mask>#<destchannel>, R:<acct> "
+    "matches a NickServ account. AUTOINVITE is NOT available on this network. "
+    "If someone asks how to do a channel thing, name the exact command; don't invent."
 )
 
 
@@ -156,38 +172,90 @@ async def _gemini(session: aiohttp.ClientSession, key: str, messages: list, max_
     return _clean((choice.get("message", {}) or {}).get("content", ""))
 
 
-async def _openrouter(session: aiohttp.ClientSession, key: str, messages: list, max_tokens: int) -> str:
-    """Third tank, after Groq and Gemini are both spent. OpenRouter is
-    OpenAI-native, so the same messages go out unchanged. The two extra headers
-    are how it attributes traffic; optional, and carry no secret. Returns the
-    reply, or "" on any failure so the caller gives up cleanly."""
-    model = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free").strip()
+async def _pollinations(session: aiohttp.ClientSession, key: str, messages: list, max_tokens: int) -> str:
+    """Pollinations.ai — OpenAI-compatible, keyless or with a free pk_ key.
+
+    Keyless works for the deepest-fallback use case; add POLLINATIONS_API_KEY
+    to raise the ~1-req-per-IP-per-hour cap. Returns the reply, or "" on any
+    failure so the caller gives up cleanly."""
+    model = os.getenv("POLLINATIONS_MODEL", "openai").strip() or "openai"
     payload = {
         "model": model,
         "temperature": 0.8,
         "max_tokens": max(max_tokens, 120),
         "messages": messages,
     }
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
     try:
         async with session.post(
-            OPENROUTER_API_URL,
-            headers={
-                "Authorization": f"Bearer {key}",
-                "HTTP-Referer": "https://github.com/batcaveirc/batcave-luna",
-                "X-Title": "BatCave Luna",
-            },
+            POLLINATIONS_API_URL,
+            headers=headers,
             json=payload,
             timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
         ) as res:
             if res.status != 200:
-                print(f"[ai] openrouter HTTP {res.status}: {(await res.text())[:200]}", flush=True)
+                print(f"[ai] pollinations HTTP {res.status}: {(await res.text())[:200]}", flush=True)
                 return ""
             data = await res.json()
     except Exception as exc:  # noqa: BLE001 — a chat command must not raise
-        print(f"[ai] openrouter call errored: {exc}", flush=True)
+        print(f"[ai] pollinations call errored: {exc}", flush=True)
         return ""
     choice = (data.get("choices") or [{}])[0]
     return _clean((choice.get("message", {}) or {}).get("content", ""))
+
+
+async def _groq(session: aiohttp.ClientSession, key: str, messages: list, max_tokens: int) -> tuple[str, str]:
+    """Internal: try the Groq model chain in order. Returns (reply, status_tag).
+    status_tag is "" on success, else a short reason the caller logs ("401",
+    "429", "silent", etc.). This is wrapped out of the main ask() loop so the
+    random-provider rotation can call it uniformly alongside _gemini and
+    _pollinations."""
+    last_tag = "silent"
+    for model in _models():
+        ceiling = (
+            max(max_tokens, REASONING_MIN_TOKENS)
+            if _needs_room_to_think(model)
+            else max_tokens
+        )
+        payload = {
+            "model": model,
+            "temperature": 0.8,
+            "max_tokens": ceiling,
+            "messages": messages,
+        }
+        if _needs_room_to_think(model):
+            payload["reasoning_effort"] = "low"
+        try:
+            async with session.post(
+                API_URL,
+                headers={"Authorization": f"Bearer {key}"},
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
+            ) as res:
+                if res.status in (400, 404):
+                    last_tag = f"{model} refused ({res.status})"
+                    continue
+                if res.status == 429:
+                    return "", "429"      # account quota: no point retrying
+                if res.status == 401:
+                    return "", "401"
+                if res.status != 200:
+                    last_tag = f"HTTP {res.status}"
+                    continue
+                data = await res.json()
+        except Exception as exc:  # noqa: BLE001
+            last_tag = str(exc)
+            continue
+        choice = (data.get("choices") or [{}])[0]
+        text = _clean((choice.get("message", {}) or {}).get("content", ""))
+        if text and not (choice.get("finish_reason") == "length"
+                         and _looks_like_reasoning(text)):
+            return text, ""
+        last_tag = ("cut off mid-thought" if choice.get("finish_reason") == "length"
+                    else "returned nothing")
+    return "", last_tag
 
 
 async def ask(prompt: str, max_tokens: int = 160, context: str = "", me: str = "") -> str:
@@ -203,101 +271,49 @@ async def ask(prompt: str, max_tokens: int = 160, context: str = "", me: str = "
         f"yourself." if me else "")
     key = os.getenv("GROQ_API_KEY", "").strip()
     gkey = os.getenv("GEMINI_API_KEY", "").strip()
-    okey = os.getenv("OPENROUTER_API_KEY", "").strip()
-    if not key and not gkey and not okey:
-        return "my voice isn't wired up yet — the owner needs to set GROQ_API_KEY."
+    pkey = os.getenv("POLLINATIONS_API_KEY", "").strip()   # optional; keyless works
+    # Groq and Gemini both need keys; Pollinations is always available keyless,
+    # so even with no keys at all we still have at least one provider.
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT + "\n" + moods.line()
          + identity + _context_note(context)},
         {"role": "user", "content": prompt[:1500]},
     ]
-    last_error = "no answer"
+
+    # Random rotation per call (owner request 2026-10-08): don't drain one
+    # provider's quota before touching the next. Each call picks a random
+    # order through the available providers; on failure, the others are tried
+    # in the shuffled order so a dead Groq day doesn't take Luna with it.
+    providers: list[tuple[str, object]] = []
+    if key:
+        providers.append(("groq", lambda s, m=messages, t=max_tokens: _groq(s, key, m, t)))
+    if gkey:
+        async def _gem_wrapper(s, m=messages, t=max_tokens):
+            text = await _gemini(s, gkey, m, t)
+            return text, "" if text else "silent"
+        providers.append(("gemini", _gem_wrapper))
+    # Pollinations is always available (keyless); include it on every call.
+    async def _poll_wrapper(s, m=messages, t=max_tokens):
+        text = await _pollinations(s, pkey, m, t)
+        return text, "" if text else "silent"
+    providers.append(("pollinations", _poll_wrapper))
+
+    random.shuffle(providers)
+    tried: list[str] = []
     async with aiohttp.ClientSession() as session:
-        for model in (_models() if key else []):
-            ceiling = (
-                max(max_tokens, REASONING_MIN_TOKENS)
-                if _needs_room_to_think(model)
-                else max_tokens
-            )
-            payload = {
-                "model": model,
-                "temperature": 0.8,
-                "max_tokens": ceiling,
-                "messages": messages,
-            }
-            # Reasoning models spend their budget THINKING and, when the ceiling
-            # cuts them off mid-thought, return the raw reasoning as content —
-            # which is how "Abstract: The ......... The user just sent gibberish.
-            # Likely no a" ended up spoken in the room. The owner's own field note
-            # settled this: reasoning_effort "low" answered in 73 tokens, while
-            # raising max_tokens never worked. Ask it not to monologue.
-            if _needs_room_to_think(model):
-                payload["reasoning_effort"] = "low"
-            try:
-                async with session.post(
-                    API_URL,
-                    headers={"Authorization": f"Bearer {key}"},
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
-                ) as res:
-                    # A retired or renamed model answers 400/404 — try the next.
-                    if res.status in (400, 404):
-                        last_error = f"model {model} refused ({res.status})"
-                        continue
-                    # Groq meters per ACCOUNT, so a 429 means the day is spent and
-                    # retrying Groq cannot help — this is the "too many questions at
-                    # once" the owner saw. A Gemini key is a SEPARATE free tank, so
-                    # fall through to it rather than going silent.
-                    if res.status == 429:
-                        last_error = "groq rate-limited (429)"
-                        if gkey:
-                            break
-                        return "too many questions at once — give me a minute."
-                    if res.status == 401:
-                        last_error = "groq key rejected (401)"
-                        if gkey:
-                            break
-                        print("[ai] groq 401 (key rejected), no fallback key set", flush=True)
-                        return "the moon is quiet right now — ask me again in a little while."
-                    if res.status != 200:
-                        last_error = f"HTTP {res.status}"
-                        continue
-                    data = await res.json()
-            except Exception as exc:  # noqa: BLE001 — a chat command must not raise
-                last_error = str(exc)
-                continue
-
-            choice = (data.get("choices") or [{}])[0]
-            msg = choice.get("message", {}) or {}
-            text = _clean(msg.get("content", ""))
-            # finish_reason "length" means it was cut off — for a reasoning model
-            # that means we caught it mid-thought, and whatever leaked out is not
-            # an answer. Treat it as empty and let the next model try.
-            if text and not (choice.get("finish_reason") == "length"
-                             and _looks_like_reasoning(text)):
-                return text
-            last_error = (f"{model} was cut off mid-thought"
-                          if choice.get("finish_reason") == "length"
-                          else f"{model} returned nothing")
-
-        # Groq is spent, broken, or not configured at all. Gemini is a separate
-        # free tank on another provider; try it before going quiet.
-        if gkey:
-            text = await _gemini(session, gkey, messages, max_tokens)
+        for name, fn in providers:
+            tried.append(name)
+            text, tag = await fn(session)
             if text:
+                print(f"[ai] {name} answered (random pick); tried: {tried}", flush=True)
                 return text
-            last_error = f"{last_error}; gemini silent too"
-        # Third tank: OpenRouter, after Groq and Gemini are both spent.
-        if okey:
-            text = await _openrouter(session, okey, messages, max_tokens)
-            if text:
-                return text
-            last_error = f"{last_error}; openrouter silent too"
+            if tag:
+                print(f"[ai] {name} failed: {tag}", flush=True)
     # Never surface the plumbing (which provider, which HTTP status, rate limits,
     # keys) to the room — that is the owner's to read in the logs. The room gets a
     # plain, in-character line with no hint of what is wired up or what failed.
-    print(f"[ai] all providers failed: {last_error}", flush=True)
+    print(f"[ai] all providers failed; tried: {tried}", flush=True)
     return "the moon is quiet right now — ask me again in a little while."
 
 
