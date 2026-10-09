@@ -1104,90 +1104,56 @@ class IRCBridge:
         self._trivia_ask(irc_ch, self._trivia.one_off())
         return True
 
-    MEDIA_CMDS = ("image", "img", "picture", "voice", "say", "tts", "speak")
-
-    def try_media_command(self, irc_ch: str, nick: str, text: str) -> bool:
-        """`$image <prompt>` / `$voice <text>` — Pollinations media generation.
-
-        IRC can't display images or play audio inline, so we post a URL that
-        Pollinations serves on-demand. Clients that preview URLs (Kiwi, many
-        others) render the image inline; clicking the audio link plays it in
-        the browser. Discord bridge will embed the image automatically when
-        the URL reaches the mirrored channel. Keyless Pollinations works for
-        both media endpoints; a POLLINATIONS_API_KEY lifts the rate limit if
-        the owner adds one.
-        """
-        import urllib.parse as _up
-        if not text.startswith(config.PREFIX):
-            return False
-        body = text[len(config.PREFIX):].strip()
-        parts = body.split(None, 1)
-        if not parts or parts[0].lower() not in self.MEDIA_CMDS:
-            return False
-        cmd = parts[0].lower()
-        prompt = parts[1].strip() if len(parts) > 1 else ""
-        if not prompt:
-            if cmd in ("image", "img", "picture"):
-                self._notice(nick, f"{config.PREFIX}image <prompt> — generates an image URL")
-            else:
-                self._notice(nick, f"{config.PREFIX}voice <text> — generates a TTS audio URL")
-            return True
-        # Trim overly long prompts; URLs over ~400 chars get truncated by some
-        # IRC bridges and the Pollinations URL still has to carry the query.
-        prompt = prompt[:380]
-        encoded = _up.quote(prompt, safe="")
-        if cmd in ("image", "img", "picture"):
-            seed = random.randint(1, 999_999_999)
-            model = os.getenv("POLLINATIONS_IMAGE_MODEL", "flux").strip() or "flux"
-            url = (f"https://image.pollinations.ai/prompt/{encoded}"
-                   f"?nologo=true&width=768&height=768&seed={seed}&model={model}")
-            self._queue(irc_ch, f"{nick}: {url}")
-        else:  # voice / say / tts / speak
-            voice = os.getenv("POLLINATIONS_VOICE", "alloy").strip() or "alloy"
-            url = (f"https://text.pollinations.ai/{encoded}"
-                   f"?model=openai-audio&voice={voice}")
-            self._queue(irc_ch, f"{nick}: {url}")
-        return True
-
-    AI_CMDS = ("ai", "aion", "aioff")
+    _AI_TOGGLE_ARGS = {"on", "off", "status"}
 
     def try_ai_toggle_command(self, irc_ch: str, nick: str, text: str) -> bool:
         """`$AI on | off | status` — per-room AI toggle (feature #25).
 
-        Operators only. Default: AI on for home rooms, off everywhere else.
-        State persisted to ai_room_state.json alongside the bot. Keeps !!join'd
-        guest rooms quiet unless the owner opts in.
+        Only intercepts `$ai on`, `$ai off`, `$ai status` (and `$aion`/`$aioff`
+        shortcuts). Any OTHER second word — `$ai hello` etc — falls through so
+        the existing `$ai <prompt>` ask-Luna command still works. Operators
+        only for the toggle itself.
         """
         from shared_cmds import is_irc_owner
         if not text.startswith(config.PREFIX):
             return False
         body = text[len(config.PREFIX):].strip()
         parts = body.split()
-        if not parts or parts[0].lower() not in self.AI_CMDS:
+        if not parts:
+            return False
+        cmd = parts[0].lower()
+        arg = parts[1].lower() if len(parts) > 1 else ""
+        # Shortcuts: $aion / $aioff always toggle. $ai <arg> only intercepts
+        # when the arg is on/off/status — otherwise the existing $ai <prompt>
+        # ask-Luna command takes it.
+        if cmd not in ("ai", "aion", "aioff"):
+            return False
+        if cmd == "ai" and arg not in self._AI_TOGGLE_ARGS and arg != "":
+            return False  # not a toggle; let $ai <prompt> handle it
+        if cmd == "ai" and not arg:
+            # Bare `$ai` with no args is ambiguous. Keep it as the existing
+            # ask-Luna command (which handles empty prompt itself) rather than
+            # hijack it to show toggle status. Owner can type `$ai status`.
             return False
         if not is_irc_owner(nick, self, irc_ch):
             return True                              # silent for non-ops
-        cmd = parts[0].lower()
-        arg = parts[1].lower() if len(parts) > 1 else ""
         ch = irc_ch.lower()
         if cmd == "aion" or arg == "on":
             self._ai_disabled_rooms.discard(ch)
             self._save_ai_state()
-            self._notice(nick, f"AI responses in {irc_ch}: \x02ENABLED\x02")
+            self._queue(irc_ch, f"[AI in {irc_ch}: \x02ENABLED\x02]")
             return True
         if cmd == "aioff" or arg == "off":
             self._ai_disabled_rooms.add(ch)
             self._save_ai_state()
-            self._notice(nick, f"AI responses in {irc_ch}: \x02DISABLED\x02")
+            self._queue(irc_ch, f"[AI in {irc_ch}: \x02DISABLED\x02]")
             return True
-        if arg == "status" or not arg:
+        if arg == "status":
             is_on = ch not in self._ai_disabled_rooms
             self._notice(nick, f"AI in {irc_ch}: {'ON' if is_on else 'OFF'}. "
                                f"Toggle with {config.PREFIX}AI on | off.")
             return True
-        self._notice(nick, f"{config.PREFIX}AI on  ·  {config.PREFIX}AI off  ·  "
-                           f"{config.PREFIX}AI status")
-        return True
+        return False
 
     def _save_ai_state(self) -> None:
         try:
@@ -2136,8 +2102,6 @@ class IRCBridge:
                     if self.try_trivia_command(target, nick, message):
                         return
                     if self.try_ai_toggle_command(target, nick, message):
-                        return
-                    if self.try_media_command(target, nick, message):
                         return
                     if self.try_nsfw_command(target, nick, message):
                         return
