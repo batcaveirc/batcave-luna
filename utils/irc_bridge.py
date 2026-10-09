@@ -9,6 +9,7 @@ Discord commands (~prefix) are suppressed from IRC relay.
 
 import asyncio
 import os
+import pathlib
 import random
 import re
 from fnmatch import fnmatch
@@ -301,6 +302,21 @@ class IRCBridge:
             for c in os.getenv("LUNA_SHADOW_ROOMS", "").split(",") if c.strip()
         }
         self._last_activity: Dict[str, float] = {}   # irc_ch -> ts of last line seen
+        # ── Per-room AI toggle (feature #25) ───────────────────────────────────
+        # Set of IRC rooms where AI responses are DISABLED. Home rooms default to
+        # enabled. Non-home rooms (!!join'd) default to disabled — the room was
+        # entered to listen, not to chat, until the owner opts in with $AI on.
+        # Persists via ai_room_state.json alongside Luna's other state files.
+        self._ai_disabled_rooms: Set[str] = set()
+        try:
+            import json as _json
+            p = pathlib.Path(__file__).parent.parent / "ai_room_state.json"
+            if p.exists():
+                self._ai_disabled_rooms = {
+                    str(k).lower() for k in (_json.loads(p.read_text()).get("disabled") or [])
+                }
+        except Exception:
+            pass
         # Speak only where she is an operator. The owner: "make sure my bots dont
         # message anything in other rooms except the rooms they are a mod." ON by
         # default; bridged/home rooms are always exempt so the relay can never go
@@ -723,6 +739,81 @@ class IRCBridge:
         t.daemon = True
         t.start()
 
+    def _joined_rooms(self) -> List[str]:
+        """Every IRC room Luna is actually joined to right now. The bot's own
+        bridge map (_i2d) + followed + shadow + anything the owner has her in."""
+        with self._map_lock:
+            homes = set(self._i2d.keys())
+        out = set(homes) | set(self._shadow or set()) | set(self._follow or set())
+        return sorted(out)
+
+    _ROOM_Q = re.compile(
+        r"\b(?:which|what|how many|list|where\s+(?:are|do))\s+(?:the\s+)?(?:other\s+)?rooms?\b",
+        re.I,
+    )
+    _ROOM_PRESENCE = re.compile(
+        r"\b(?:where\s+(?:are|do)\s+you|rooms?\s+(?:are|do)\s+you|you\s+(?:are|'re)\s+in)\b",
+        re.I,
+    )
+    _ABOUT_USER = re.compile(
+        r"\b(?:about|tell\s+me\s+about|know\s+about|info\s+(?:on|about)|"
+        r"what\s+(?:do\s+)?you\s+know\s+(?:of|about)|who\s+is)\s+([A-Za-z0-9_\-\[\]{}\\\|`^]+)\b",
+        re.I,
+    )
+    _KICK_Q = re.compile(r"\b(kick(?:ed)?|ban(?:ned)?|disconnect(?:ed)?|removed)\b", re.I)
+
+    def _facts_for_prompt(self, prompt: str, irc_ch: str, asker: str) -> str:
+        """Factual grounding to inject into the prompt. Returns a FACTS: block or ''.
+
+        The AI hallucinates when asked things like "which rooms are you in" or
+        "tell me about pinno" because it has no idea — this method pulls the
+        real answers from the bot's own state and hands them to the model. The
+        SYSTEM_PROMPT instructs the model to prefer FACTS over invention.
+        """
+        p = prompt or ""
+        facts: List[str] = []
+
+        # "which rooms are you in" / "where are you" / "are you kicked"
+        if self._ROOM_Q.search(p) or self._ROOM_PRESENCE.search(p) or self._KICK_Q.search(p):
+            rooms = self._joined_rooms()
+            facts.append(
+                f"FACT: You are connected RIGHT NOW and joined to these rooms: "
+                f"{', '.join(rooms) if rooms else '(none yet)'}"
+            )
+
+        # "tell me about <nick>" / "what do you know about X"
+        for m in self._ABOUT_USER.finditer(p):
+            target = m.group(1)
+            tl = target.lower()
+            # Don't lecture about pronouns, articles, or the asker.
+            if tl in {"you", "me", "yourself", "this", "that", "them", asker.lower()}:
+                continue
+            memory = self._memory_for(target)
+            if memory:
+                facts.append(
+                    f"FACT: What you actually remember about {target} (from rooms you share):\n{memory}"
+                )
+            else:
+                facts.append(
+                    f"FACT: You have not seen {target} speak in any room you watch. "
+                    f"Say so honestly — do not invent a history for them."
+                )
+
+        # "which rooms is <X> in" — cross-room lookup for someone else
+        m = re.search(r"\b(?:which|what)\s+rooms?\s+(?:is|does)\s+(\S+)", p, re.I)
+        if m:
+            target = m.group(1).strip("?.,!").lower()
+            if target not in {"you", "me", asker.lower()}:
+                memory = self._memory_for(target)
+                if not memory:
+                    facts.append(
+                        f"FACT: You have no record of {target} being in any room you watch."
+                    )
+
+        if not facts:
+            return ""
+        return "FACTS YOU KNOW RIGHT NOW (prefer these over any guess):\n" + "\n".join(facts)
+
     def _memory_for(self, nick: str) -> str:
         """Return a formatted recall block for the prompt, or '' if empty.
 
@@ -847,6 +938,10 @@ class IRCBridge:
         """
         if self.loop is None or not prompt.strip():
             return False
+        # Feature #25: per-room AI toggle. If this room's AI is turned off, bail
+        # before cooldown accounting so the toggle feels crisp.
+        if irc_ch.lower() in self._ai_disabled_rooms:
+            return False
         now = time.time()
         key = nick.lower()
         if now - self._ai_cooldown.get(key, 0.0) < _AI_COOLDOWN:
@@ -870,6 +965,14 @@ class IRCBridge:
         if memory:
             context = (context + "\n\n" if context else "") \
                 + f"What {nick} has said recently (you remember them from this and nearby rooms):\n{memory}"
+        # Grounding (added 2026-10-08): the AI was happily inventing room names
+        # and user histories when asked ("which rooms are you in" → "the midnight
+        # playlist chatroom"; "tell me about pinno" → made-up biography). The
+        # FACTS block is prepended to context so the system prompt sees the
+        # ground truth before deciding how to answer.
+        facts = self._facts_for_prompt(prompt, irc_ch, nick)
+        if facts:
+            context = (facts + "\n\n" + context) if context else facts
 
         def _done(fut):
             try:
@@ -1000,6 +1103,54 @@ class IRCBridge:
         self._trivia_channel = irc_ch
         self._trivia_ask(irc_ch, self._trivia.one_off())
         return True
+
+    AI_CMDS = ("ai", "aion", "aioff")
+
+    def try_ai_toggle_command(self, irc_ch: str, nick: str, text: str) -> bool:
+        """`$AI on | off | status` — per-room AI toggle (feature #25).
+
+        Operators only. Default: AI on for home rooms, off everywhere else.
+        State persisted to ai_room_state.json alongside the bot. Keeps !!join'd
+        guest rooms quiet unless the owner opts in.
+        """
+        from shared_cmds import is_irc_owner
+        if not text.startswith(config.PREFIX):
+            return False
+        body = text[len(config.PREFIX):].strip()
+        parts = body.split()
+        if not parts or parts[0].lower() not in self.AI_CMDS:
+            return False
+        if not is_irc_owner(nick, self, irc_ch):
+            return True                              # silent for non-ops
+        cmd = parts[0].lower()
+        arg = parts[1].lower() if len(parts) > 1 else ""
+        ch = irc_ch.lower()
+        if cmd == "aion" or arg == "on":
+            self._ai_disabled_rooms.discard(ch)
+            self._save_ai_state()
+            self._notice(nick, f"AI responses in {irc_ch}: \x02ENABLED\x02")
+            return True
+        if cmd == "aioff" or arg == "off":
+            self._ai_disabled_rooms.add(ch)
+            self._save_ai_state()
+            self._notice(nick, f"AI responses in {irc_ch}: \x02DISABLED\x02")
+            return True
+        if arg == "status" or not arg:
+            is_on = ch not in self._ai_disabled_rooms
+            self._notice(nick, f"AI in {irc_ch}: {'ON' if is_on else 'OFF'}. "
+                               f"Toggle with {config.PREFIX}AI on | off.")
+            return True
+        self._notice(nick, f"{config.PREFIX}AI on  ·  {config.PREFIX}AI off  ·  "
+                           f"{config.PREFIX}AI status")
+        return True
+
+    def _save_ai_state(self) -> None:
+        try:
+            import json as _json
+            p = pathlib.Path(__file__).parent.parent / "ai_room_state.json"
+            p.write_text(_json.dumps({"disabled": sorted(self._ai_disabled_rooms)}))
+        except Exception as e:            # noqa: BLE001
+            print(f"[irc_bridge] AI state save failed: {e}", flush=True)
 
     def try_nsfw_command(self, irc_ch: str, nick: str, text: str) -> bool:
         """Adult mode: opt-in, disclosed in the topic, consent on both sides.
@@ -1938,6 +2089,8 @@ class IRCBridge:
                     # and the answer arrives through the queue, exactly as $ai
                     # already does.
                     if self.try_trivia_command(target, nick, message):
+                        return
+                    if self.try_ai_toggle_command(target, nick, message):
                         return
                     if self.try_nsfw_command(target, nick, message):
                         return
