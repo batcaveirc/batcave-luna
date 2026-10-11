@@ -423,15 +423,20 @@ class IRCBridge:
     def join_channel(self, irc_channel: str, discord_channel: str) -> bool:
         """
         Add a Discord↔IRC bridge mapping and JOIN the IRC channel.
-        Returns False if the mapping already exists unchanged.
+        Returns True in both the "newly added" and "already bridged, so this
+        was a rejoin request" cases. The owner reported 2026-10-11 that
+        `$ircjoin #room` on a room they'd been kicked from silently did
+        nothing — because the mapping was still in place, the old code
+        returned False early WITHOUT sending the JOIN, so Luna sat out of
+        the room with the Discord side saying "already bridged." Rejoin is
+        the primary use for this command; we always issue the JOIN.
         """
         irc_ch  = irc_channel if irc_channel.startswith("#") else f"#{irc_channel}"
         disc_ch = discord_channel.lower()
         with self._map_lock:
             existing = self._d2i.get(disc_ch)
-        if existing and existing.lower() == irc_ch.lower():
-            return False  # already bridged
-        self._add_mapping(disc_ch, irc_ch)
+        if not (existing and existing.lower() == irc_ch.lower()):
+            self._add_mapping(disc_ch, irc_ch)
         if self._connected:
             self._raw(f"JOIN {irc_ch}")
         return True
