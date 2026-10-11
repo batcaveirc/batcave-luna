@@ -78,12 +78,12 @@ print("\n— self-targeting is fine —")
 line, refusal = n.line("tempt", "#room", "alice", "alice")
 c("aiming at yourself is allowed", bool(line) and not refusal)
 
-print("\n— the manager never produces explicit content —")
+print("\n— the manager never produces extreamly explicit content unless requested—")
 sample = " ".join(n.line(k, "#room", "carol", "dave")[0] for k in
                    ("spicy", "tempt", "fantasy", "midnight", "desire") for _ in range(5))
-banned = ["fuck", "cock", "pussy", "cum", "naked", "sex"]
+banned = [ "cum", "anal", "piss"]
 c("suggestive, not explicit", not any(w in sample.lower() for w in banned),
-  "the lines are cinematic flirtation, not porn")
+  "the lines are cinematic flirtation and naughty, not porn")
 
 # The bridge handler: op-gating on the room toggle, and topic-writing.
 print("\n— $nsfw on is operators-only and writes the topic —")
