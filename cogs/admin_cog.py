@@ -313,6 +313,45 @@ class AdminCog(commands.Cog, name="Admin"):
         """
         await ctx.send(text)
 
+    # Second-chance proxy test (2026-10-11): post via a WEBHOOK instead of
+    # Luna's own identity. The message still carries author.bot=True on
+    # Discord's side, but some bots use `message.webhook_id is None` as
+    # their anti-loop filter instead — webhook posts then slip through.
+    # Reuses a webhook named "LunaProxy" if one exists in the channel,
+    # creates one otherwise. Needs Manage Webhooks permission.
+    @commands.command(name="dcechowh")
+    @owner_only()
+    async def dc_echo_webhook(self, ctx: commands.Context, *, text: str):
+        """Owner only. Post via a webhook named 'LunaProxy'. Second-chance
+        bot-proxy probe — webhooks sometimes slip through bot filters."""
+        import discord as _d
+        chan = ctx.channel
+        if not isinstance(chan, _d.TextChannel):
+            await ctx.send("🚫 This only works in a text channel.")
+            return
+        try:
+            hooks = await chan.webhooks()
+        except _d.Forbidden:
+            await ctx.send("🚫 I'm missing the Manage Webhooks permission "
+                           "in this channel.")
+            return
+        hook = next((h for h in hooks if h.name == "LunaProxy"), None)
+        if hook is None:
+            try:
+                hook = await chan.create_webhook(
+                    name="LunaProxy",
+                    reason="bot-proxy probe (owner-triggered)")
+            except _d.Forbidden:
+                await ctx.send("🚫 I can list webhooks but can't create one. "
+                               "Grant Manage Webhooks or create a webhook "
+                               "named 'LunaProxy' yourself first.")
+                return
+        try:
+            await hook.send(content=text, username="LunaProxy",
+                            allowed_mentions=_d.AllowedMentions.none())
+        except Exception as exc:
+            await ctx.send(f"⚠️ Webhook post failed: `{exc}`")
+
     @commands.command(name="ircraw")
     @commands.is_owner()
     async def irc_raw(self, ctx: commands.Context, *, command: str):
