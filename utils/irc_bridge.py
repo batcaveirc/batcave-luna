@@ -2196,6 +2196,47 @@ class IRCBridge:
                     ch_nicks.discard(nick)
             # Nick tracking only — no announcement to Discord
 
+        # KICK — parity with Dracula's auto-rejoin (owner request 2026-10-11).
+        # When Luna/Andromeda is the one kicked from a room she belongs in
+        # (home / shadow / follow), revert to the base nick (NickServ may have
+        # bumped her), then rejoin after a 3s cool-off. Kicked FROM a room
+        # that isn't ours? Just track the membership change, don't fight back.
+        m = re.match(r"^:([^!]+)!\S+\s+KICK\s+(\S+)\s+(\S+)", line)
+        if m:
+            kicker  = m.group(1)
+            channel = m.group(2)
+            victim  = m.group(3)
+            ch_low  = channel.lower()
+            with self._nicks_lock:
+                self._nicks.get(ch_low, set()).discard(victim)
+            # Is it US? Compare both the current rotated nick and the base.
+            me_now  = (self._nick or "").lower()
+            me_base = (config.IRC_NICK or "").lower()
+            if victim.lower() in (me_now, me_base):
+                belongs = (
+                    ch_low in self._home_rooms()
+                    or ch_low in (self._shadow or set())
+                    or ch_low in {c.lower() for c in (self._follow or set())}
+                )
+                if belongs:
+                    print(f"[irc_bridge] Kicked from {channel} by {kicker} — "
+                          f"reverting nick and rejoining in 3s.", flush=True)
+                    # If we were rotated, take the base nick back first; a
+                    # rejoin under a Guest-ish name is how a bot gets banned
+                    # instead of let back in.
+                    if me_now != me_base and config.IRC_NICKSERV_PASS:
+                        try:
+                            self._raw(f"PRIVMSG NickServ :GHOST {config.IRC_NICK} "
+                                      f"{config.IRC_NICKSERV_PASS}")
+                            self._raw(f"NICK {config.IRC_NICK}")
+                        except Exception:
+                            pass
+                    threading.Timer(3.0, lambda c=channel: self._raw(f"JOIN {c}")).start()
+                else:
+                    print(f"[irc_bridge] Kicked from {channel} by {kicker} — "
+                          f"not a home/shadow/follow room, staying out.", flush=True)
+            return
+
     # ── StarAlign relay ────────────────────────────────────────────────────────
 
     def _relay_to_staralign(self, nick: str, text: str) -> None:
