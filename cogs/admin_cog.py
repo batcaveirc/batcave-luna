@@ -97,14 +97,36 @@ def mod_only():
 
 
 def owner_only():
-    """Checks against config.OWNER_IDS set from the OWNER_IDS env var.
-    Doesn't rely on commands.is_owner() because that needs bot.owner_ids
-    wired at startup (not currently done in this project)."""
+    """Owner check for Discord-side commands.
+
+    Owner match is EITHER:
+      - ctx.author.id ∈ config.OWNER_IDS (numeric, from OWNER_IDS env), OR
+      - ctx.author.name.lower() ∈ names set (from OWNER_DISCORD_NAMES env,
+        comma-separated usernames)
+
+    Added 2026-10-11 because the owner has two Discord accounts
+    (xvampireking, k1ngofgoodtimes) and neither's numeric ID was in
+    OWNER_IDS; the username path lets them opt in without Developer
+    Mode. On a reject the message echoes back their ID + name so they
+    can see what to add to the secret.
+    """
+    import os as _os
+    _names = {
+        n.strip().lower()
+        for n in _os.getenv("OWNER_DISCORD_NAMES", "").split(",")
+        if n.strip()
+    }
     async def predicate(ctx: commands.Context):
-        if ctx.author.id not in config.OWNER_IDS:
-            await ctx.send("🚫 Owner only.")
-            return False
-        return True
+        if ctx.author.id in config.OWNER_IDS:
+            return True
+        if _names and ctx.author.name.lower() in _names:
+            return True
+        await ctx.send(
+            f"🚫 Owner only. (your id `{ctx.author.id}`, username "
+            f"`{ctx.author.name}` — add either to OWNER_IDS or "
+            f"OWNER_DISCORD_NAMES secret)"
+        )
+        return False
     return commands.check(predicate)
 
 

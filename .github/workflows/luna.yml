@@ -53,6 +53,7 @@ jobs:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
           OWNER_IDS: ${{ secrets.OWNER_IDS }}
+          OWNER_DISCORD_NAMES: ${{ secrets.OWNER_DISCORD_NAMES }}
           IRC_NICKSERV_PASS: ${{ secrets.IRC_NICKSERV_PASS }}
           # The ACCOUNT to identify as, which is not always the nick being
           # worn. IDENTIFY takes "<password>" or "<account> <password>"; the
