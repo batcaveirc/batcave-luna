@@ -96,6 +96,18 @@ def mod_only():
     return commands.check(predicate)
 
 
+def owner_only():
+    """Checks against config.OWNER_IDS set from the OWNER_IDS env var.
+    Doesn't rely on commands.is_owner() because that needs bot.owner_ids
+    wired at startup (not currently done in this project)."""
+    async def predicate(ctx: commands.Context):
+        if ctx.author.id not in config.OWNER_IDS:
+            await ctx.send("🚫 Owner only.")
+            return False
+        return True
+    return commands.check(predicate)
+
+
 # ── Cog ───────────────────────────────────────────────────────────────────────
 
 class AdminCog(commands.Cog, name="Admin"):
@@ -256,6 +268,28 @@ class AdminCog(commands.Cog, name="Admin"):
             await ctx.send(f"🏷️ Sent IRC NICK change → **{new_nick}**")
         else:
             await ctx.send("❌ IRC bridge is not connected right now.")
+
+    # ── Bot-proxy test (2026-10-11) ─────────────────────────────────────────
+    # Post arbitrary text as Luna into the current Discord channel. Lets the
+    # owner probe whether other Discord bots (NotSoBot, etc.) respond to
+    # messages from Luna — the "author.bot === true" convention normally
+    # blocks them, so this test tells us whether a bot-to-bot proxy path
+    # is even possible for a given target bot.
+    #
+    # Owner-only, not mod-only, because this bypasses every other content
+    # filter and could be used to post anything into a Discord channel.
+    @commands.command(name="dcecho")
+    @owner_only()
+    async def dc_echo(self, ctx: commands.Context, *, text: str):
+        """Owner only. Post the given text verbatim as Luna in this channel.
+
+        Use to test whether other Discord bots will respond to Luna's
+        messages. Example in a channel with NotSoBot:
+            $dcecho .ping
+        If NotSoBot replies, the bot-to-bot proxy path works for it.
+        If NotSoBot stays silent, it filters bot messages (most do).
+        """
+        await ctx.send(text)
 
     @commands.command(name="ircraw")
     @commands.is_owner()
