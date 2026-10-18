@@ -160,7 +160,7 @@ class SharedCommands:
         "sendregulars", "ship", "slowmode", "spill", "stats", "tea", "tell",
         "to", "tod", "truth", "truthordare", "unmute", "unwarn", "vibe",
         "vibecheck", "voice", "warn", "warnings", "warns", "who",
-        "s",
+        "s", "dcecho", "dcechowh",
     }
 
     def irc_command_names(self):
@@ -257,8 +257,8 @@ class SharedCommands:
                 f"{p}ircwho who is in the room. "
                 f"{p}nsfw on|off — set a room to adult mode (writes the 18+ notice "
                 f"into its topic). "
-                f"{p}AI on|off|status — per-room AI toggle (default off in "
-                f"{p}join'd guest rooms, on in home rooms). "
+                f"{p}ai on|off|status — per-room AI toggle (on in home rooms, "
+                f"off in rooms I was only invited into). "
                 f"Rooms: {p}part #room — leave a room now (any but a bridged one). "
                 f"Automatic: {p}mod on|off — I cover what Dracula cannot see: "
                 f"disguised text, mass pings, colour flooding, adverts, walls "

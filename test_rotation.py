@@ -61,8 +61,10 @@ ok = b._rotate_nick()
 # here and nowhere earlier.
 c("rotating does not throw, and asks the server for a name", ok and len(b.sent) == 1,
   f"sent {b.sent}")
-c("the name it asked for came from the pool",
-  b.sent and b.sent[0].split()[-1] in config.IRC_NICK_POOL, f"sent {b.sent}")
+# CHANGED ON PURPOSE 2026-10-09: every rotation name carries digits (see the
+# Mortis note below), so the POOL STEM is what must match.
+c("the name it asked for came from the pool (a pool name plus digits)",
+  b.sent and b.sent[0].split()[-1].rstrip("0123456789") in config.IRC_NICK_POOL, f"sent {b.sent}")
 c("case is preserved — Selene, not selene",
   b.sent and b.sent[0].split()[-1][0].isupper(), f"sent {b.sent}")
 
@@ -103,10 +105,13 @@ c("an empty pool still rotates, with no configuration at all", ok and asked,
 # everytime?" A plain rotation must now be a genuinely DIFFERENT name, and the
 # number is reserved for when that name comes back taken.
 c("she picks a genuinely different name, not her own with digits",
-  asked in config.IRC_DEFAULT_NAMES, f"asked for {asked!r}")
-c("and there is no number on it, because nothing was in conflict",
-  not any(ch.isdigit() for ch in asked),
-  f"asked for {asked!r} — numbering is the conflict fallback, not the naming scheme")
+  asked.rstrip("0123456789") in config.IRC_DEFAULT_NAMES, f"asked for {asked!r}")
+# CHANGED ON PURPOSE 2026-10-09. This used to require NO number unless the name
+# was taken. An operator G-lined the sibling bot for wearing "Mortis" — a bare
+# pool name owned by a real registered user — while firing NickServ IDENTIFY.
+# The owner's fix: "add numbers to the nick name". Digits are now always added.
+c("and it always carries digits, so it can't be someone's registered nick",
+  asked[-1:].isdigit(), f"asked for {asked!r}")
 c("and it is not the name she is already wearing", asked.lower() != config.IRC_NICK.lower())
 
 # Over several draws she must actually vary, or "rotation" is one rename.
@@ -120,7 +125,8 @@ print("\n— a taken name gets numbered, not abandoned —")
 b = bridge(pool=("Selene",))
 b._rotate_nick()
 first = b.sent[0].split()[-1]
-c("a pool name is tried plain first", first == "Selene", f"asked {first!r}")
+c("a pool name is asked for WITH digits (the Mortis G-line rule)",
+  first.startswith("Selene") and first[len("Selene"):].isdigit(), f"asked {first!r}")
 retry = b._next_rotation_name(True, first)
 c("and the retry is that SAME name with digits after it",
   retry.startswith("Selene") and retry[len("Selene"):].isdigit(),

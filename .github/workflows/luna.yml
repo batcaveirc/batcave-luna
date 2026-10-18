@@ -92,8 +92,19 @@ jobs:
           # silent. Dormant until the matching secret is set — no key, no calls.
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'gemini-flash-latest' }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free' }}
+          # Pollinations: refused (401) without a key from GitHub's runners, so
+          # it joins the rotation only once POLLINATIONS_API_KEY is set.
+          POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
+          POLLINATIONS_MODEL: ${{ secrets.POLLINATIONS_MODEL || 'openai' }}
+          # Per-person AI allowance; the owner is exempt.
+          AI_USER_PER_10M: ${{ secrets.AI_USER_PER_10M || '5' }}
+          AI_USER_PER_DAY: ${{ secrets.AI_USER_PER_DAY || '25' }}
+          # Discord join/leave log for the home rooms, with user@host.
+          # Channel: name or id; empty = the server's channel with "leave" in
+          # its name, else bot-logs. LUNA_JOINLOG=off disables it.
+          LUNA_JOINLOG: ${{ secrets.LUNA_JOINLOG || 'on' }}
+          LUNA_JOINLOG_CHANNEL: ${{ secrets.LUNA_JOINLOG_CHANNEL }}
+          LUNA_JOINLOG_ALL: ${{ secrets.LUNA_JOINLOG_ALL }}
           # Phase 1 self-restart. PAT with 'workflow' scope; empty = no-op (cron
           # backstop keeps working). GITHUB_TOKEN cannot trigger new runs.
           # GITHUB_REPOSITORY is already set automatically by Actions.

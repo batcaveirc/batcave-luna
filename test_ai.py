@@ -81,17 +81,69 @@ print("\n— a Gemini fallback, so 'too many questions' is no longer the end of 
 # is Groq's 429, metered per account. Gemini is a separate free tank.
 c("she reads a GEMINI_API_KEY", "GEMINI_API_KEY" in _cog)
 c("and calls Gemini's OpenAI-compatible endpoint", "generativelanguage.googleapis.com" in _cog)
-c("a 429 falls through to Gemini instead of dead-ending",
-  "if gkey" in _cog and 'res.status == 429' in _cog)
-c("Groq is skipped entirely when only a Gemini key is set",
-  "_models() if key else []" in _cog)
-c("the messages are built once and reused for both providers",
+c("the messages are built once and reused for every provider",
   _cog.count('"role": "system"') == 1,
   f'found {_cog.count(chr(34) + "role" + chr(34) + ": " + chr(34) + "system" + chr(34))} system blocks')
-c("and a third tank, OpenRouter, after Gemini",
-  "OPENROUTER_API_KEY" in _cog and "openrouter.ai/api/v1" in _cog)
-c("OpenRouter is only reached after Gemini (right order)",
-  -1 < _cog.find("await _gemini(session") < _cog.find("await _openrouter(session"))
+
+# The strict Groq -> Gemini -> OpenRouter order these checks used to assert was
+# replaced on purpose: 2026-10-08 the owner asked for a random rotation and
+# OpenRouter was retired; 2026-10-18 a failing provider is benched instead of
+# retried on every message (Dracula's log: Pollinations 401 on 33/33 calls,
+# Gemini 429 on 16/25). Checked by RUNNING ask() against fake providers, not
+# by reading the source.
+import asyncio, os as _os
+print("\n— provider rotation: a dead provider is benched, the next one answers —")
+c("OpenRouter is gone (retired 2026-10-08)", "openrouter" not in _cog.lower())
+c("Gemini's hidden thinking is switched off", '"reasoning_effort": "none"' in _cog)
+
+def _run(prompt="hi", keys=("GROQ_API_KEY", "GEMINI_API_KEY"), groq=None, gemini=None, poll=None):
+    calls = []
+    def fake(name, result):
+        async def f(session, *a):
+            calls.append(name)
+            return result
+        return f
+    ai._BENCH.clear()
+    saved = {k: _os.environ.get(k) for k in ("GROQ_API_KEY", "GEMINI_API_KEY", "POLLINATIONS_API_KEY")}
+    for k in saved:
+        _os.environ.pop(k, None)
+    for k in keys:
+        _os.environ[k] = "x"
+    real = (ai._groq, ai._gemini, ai._pollinations)
+    ai._groq = fake("groq", groq or ("", "", 0))
+    ai._gemini = fake("gemini", gemini or ("", "", 0))
+    ai._pollinations = fake("pollinations", poll or ("", "", 0))
+    try:
+        out = asyncio.run(ai.ask(prompt))
+    finally:
+        ai._groq, ai._gemini, ai._pollinations = real
+        for k, v in saved.items():
+            if v is None:
+                _os.environ.pop(k, None)
+            else:
+                _os.environ[k] = v
+    return out, calls
+
+out, calls = _run(groq=("", "", 429), gemini=("gemini says hi", "stop", 200))
+c("a Groq 429 falls through and Gemini answers", out == "gemini says hi", f"{out!r} {calls}")
+c("and the 429 benches Groq for a while", ai._BENCH.get("groq", 0) > 0 or "groq" not in calls)
+
+out, calls = _run(keys=("GEMINI_API_KEY",), gemini=("only gemini", "stop", 200))
+c("Groq is never called without a Groq key", "groq" not in calls and out == "only gemini", f"{calls}")
+c("Pollinations is never called without its key", "pollinations" not in calls, f"{calls}")
+
+out, calls = _run(groq=("(Dracula IRC bot) answer concisely without evading", "stop", 200),
+                  gemini=("a real answer", "stop", 200))
+c("a leaked planning note is never posted; the other provider answers",
+  out == "a real answer", f"{out!r} {calls}")
+
+out, calls = _run(groq=("2026 hasn't", "length", 200), gemini=("Not yet, it is still 2026.", "stop", 200))
+c("a reply cut off mid-sentence is never posted", out == "Not yet, it is still 2026.", f"{out!r}")
+
+out, calls = _run(prompt="give me html code for a website",
+                  groq=("<html>...</html>", "stop", 200), gemini=("<html></html>", "stop", 200))
+c("a request for code gets a quip, and no provider is even asked",
+  out in ai._WITTY_DECLINES and calls == [], f"{out!r} {calls}")
 
 print("\n— sycophancy: she holds the answer instead of caving to a guess —")
 c("the prompt forbids confirming a wrong guess",

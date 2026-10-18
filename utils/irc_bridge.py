@@ -105,6 +105,40 @@ _TRUST_END = re.compile(r"End of .* FLAGS listing", re.I)
 _AI_COOLDOWN      = 4        # seconds between AI replies to one person
 _AI_CHANNEL_GAP   = 2        # seconds between AI replies in a channel
 
+# Per-person AI allowance (owner, 2026-10-18: "dont let users over use the ai
+# ... redirect them in a humorous way instead"). The daily AI budget is shared
+# by the whole room; one person asking question after question can empty it.
+# Over the limit: ONE joke, then silence until their window frees.
+_AI_PER_10M = max(1, int(os.getenv("AI_USER_PER_10M", "5") or 5))
+_AI_PER_DAY = max(1, int(os.getenv("AI_USER_PER_DAY", "25") or 25))
+_OVERUSE_LINES = (
+    "{n}, darling, you've had your fill of moonlight — share some with the room 🌙",
+    "{n}, even I need a breath between bites. go charm a human for a while?",
+    "that's your share of my secrets for now, {n}. the mortals here talk for free.",
+    "{n}, you've asked more than the stars have answers. come back in a bit.",
+    "{n}, my voice needs a rest. sit with the room, I'll be back 😏",
+)
+
+
+def _ai_quota_check(uses: Dict[str, list], told: Dict[str, float], nick: str,
+                    now: float) -> str:
+    """'ok' (recorded), 'joke' (say one redirect) or 'quiet' (already told)."""
+    k = nick.lower()
+    day = [t for t in uses.get(k, []) if now - t < 86400]
+    uses[k] = day
+    recent = sum(1 for t in day if now - t < 600)
+    if recent < _AI_PER_10M and len(day) < _AI_PER_DAY:
+        day.append(now)
+        told.pop(k, None)
+        if len(uses) > 2000:                      # keep the map bounded
+            for kk in [kk for kk, v in uses.items() if not v or now - v[-1] > 86400]:
+                uses.pop(kk, None)
+        return "ok"
+    if k not in told or now - told[k] > 600:
+        told[k] = now
+        return "joke"
+    return "quiet"
+
 
 def _wrap(text: str, size: int = 380) -> List[str]:
     """Split on word boundaries. IRC drops everything past ~512 bytes for the
@@ -953,6 +987,24 @@ class IRCBridge:
             return False        # too soon; the line still relays as normal chat
         if now - self._ai_last_channel < _AI_CHANNEL_GAP:
             return False
+        try:
+            from shared_cmds import is_irc_owner
+            owner = is_irc_owner(nick, self, irc_ch)
+        except Exception:                      # noqa: BLE001
+            owner = False
+        if not owner:
+            if not hasattr(self, "_ai_uses"):
+                self._ai_uses: Dict[str, list] = {}
+                self._ai_told: Dict[str, float] = {}
+            q = _ai_quota_check(self._ai_uses, self._ai_told, nick, now)
+            if q == "quiet":
+                return False
+            if q == "joke":
+                print(f"[irc_bridge] {nick} hit the per-person AI limit — redirected.", flush=True)
+                self._queue(irc_ch, random.choice(_OVERUSE_LINES).replace("{n}", nick))
+                self._ai_cooldown[key] = now
+                self._ai_last_channel = now
+                return True
         self._ai_cooldown[key] = now
         self._ai_last_channel = now
 
@@ -1783,19 +1835,15 @@ class IRCBridge:
                 threading.Timer(25.0, self._start_trust_teamwork).start()
             except Exception as e:  # noqa: BLE001
                 print(f"[irc_bridge] trust teamwork start failed: {e}")
-            # Disclose the owner's declared-adult rooms in their topic, so
-            # "entering is the agreement" still holds even though no one ran
-            # $nsfw on. Best-effort and delayed so ChanServ autoop lands first;
-            # topic_with_notice() keeps whatever the topic already said and does
-            # nothing if the marker is already there.
-            for ch in self.all_channels():
-                if self._nsfw.is_declared_adult(ch):
-                    def _disclose(c=ch):
-                        cur = self.get_topic(c) or ""
-                        from utils.nsfw import TOPIC_MARK
-                        if TOPIC_MARK not in cur:
-                            self._raw(f"TOPIC {c} :{self._nsfw.topic_with_notice(cur)}")
-                    threading.Timer(6.0, _disclose).start()
+            # No automatic TOPIC on connect (owner, 2026-10-18: "make sure it
+            # dont change topic of the room everytime"). This block used to
+            # re-add the 18+ notice to every declared-adult room on EVERY
+            # restart, so any time the owner set a different topic, the next
+            # restart (every ~6h, and every push) put it back — Luna and Dracula
+            # taking turns rewriting the room. It also raced the 332 topic
+            # reply: if it had not arrived within 6s, `cur` was empty and the
+            # human topic was replaced outright. The notice is now written only
+            # when the owner runs $nsfw on.
             self._connected = True
             print(f"[irc_bridge] Connected and joined IRC channels.")
             return
@@ -1937,10 +1985,15 @@ class IRCBridge:
         if m:
             old_nick, new_nick = m.group(1), m.group(2)
             with self._nicks_lock:
+                rooms = [c for c, ns in self._nicks.items() if old_nick in ns]
                 for ch_nicks in self._nicks.values():
                     if old_nick in ch_nicks:
                         ch_nicks.discard(old_nick)
                         ch_nicks.add(new_nick)
+            if any(self._joinlog_wanted(c) for c in rooms) \
+                    and old_nick.lower() != (self._nick or "").lower():
+                self._joinlog(f"🔁 `{old_nick.replace('`', chr(39))}` is now "
+                              f"`{new_nick.lstrip(':').replace('`', chr(39))}` — `{self._host_of(line)}`")
             # Were WE the one renamed? NickServ enforcement force-renames an
             # unidentified protected nick to Guest#### within ~1.5s, and the
             # channel then refuses "Guest*". This took the Vampire bot offline
@@ -2172,6 +2225,15 @@ class IRCBridge:
             disc_ch = self.get_discord_for_irc(ch_low)
             with self._nicks_lock:
                 self._nicks.setdefault(ch_low, set()).add(nick)
+            me = nick.lower() in ((self._nick or "").lower(), config.IRC_NICK.lower())
+            if not me and self._joinlog_wanted(ch_low):
+                # extended-join: ":n!u@h JOIN #chan <account|*> :realname"
+                rest = line.split(" JOIN ", 1)[1].split()
+                acct = rest[1] if len(rest) > 1 and rest[1] not in ("*", "0") \
+                    and not rest[1].startswith(":") else ""
+                self._joinlog(f"➡️ `{nick.replace('`', chr(39))}` joined {channel} — "
+                              f"`{self._host_of(line)}`"
+                              + (f" · account `{acct}`" if acct else " · unregistered"))
             if nick.lower() == config.IRC_NICK.lower():
                 self._raw(f"NAMES {channel}")   # populate nick list on own join
             else:
@@ -2190,6 +2252,10 @@ class IRCBridge:
             disc_ch = self.get_discord_for_irc(ch_low)
             with self._nicks_lock:
                 self._nicks.get(ch_low, set()).discard(nick)
+            if self._joinlog_wanted(ch_low):
+                why = line.split(" :", 1)[1][:120] if " :" in line else ""
+                self._joinlog(f"⬅️ `{nick.replace('`', chr(39))}` left {channel} — "
+                              f"`{self._host_of(line)}`" + (f" · {why}" if why else ""))
             return
 
         # QUIT
@@ -2197,9 +2263,14 @@ class IRCBridge:
         if m:
             nick = m.group(1)
             with self._nicks_lock:
+                was_in = [c for c, ns in self._nicks.items() if nick in ns]
                 for ch_nicks in self._nicks.values():
                     ch_nicks.discard(nick)
-            # Nick tracking only — no announcement to Discord
+            logged = [c for c in was_in if self._joinlog_wanted(c)]
+            if logged:
+                self._joinlog(f"🚪 `{nick.replace('`', chr(39))}` quit ({', '.join(sorted(logged))}) — "
+                              f"`{self._host_of(line)}` · {m.group(2)[:120]}")
+            return
 
         # KICK — parity with Dracula's auto-rejoin (owner request 2026-10-11).
         # When Luna/Andromeda is the one kicked from a room she belongs in
@@ -2214,6 +2285,10 @@ class IRCBridge:
             ch_low  = channel.lower()
             with self._nicks_lock:
                 self._nicks.get(ch_low, set()).discard(victim)
+            if self._joinlog_wanted(ch_low):
+                why = line.split(" :", 1)[1][:120] if " :" in line else ""
+                self._joinlog(f"👢 `{victim.replace('`', chr(39))}` kicked from {channel} by "
+                              f"`{kicker.replace('`', chr(39))}`" + (f" · {why}" if why else ""))
             # Is it US? Compare both the current rotated nick and the base.
             me_now  = (self._nick or "").lower()
             me_base = (config.IRC_NICK or "").lower()
@@ -2268,6 +2343,91 @@ class IRCBridge:
         )
 
     # ── Admin relay (owner-visible mirror of non-home room chatter) ────────
+    # ── Discord join/leave log (owner request 2026-10-18) ────────────────────
+    # Every JOIN / PART / QUIT / KICK / NICK in the home rooms, with the
+    # user@host the server shows, posted to a Discord log channel — so the owner
+    # can see who came and went, from where, and spot an attacker returning
+    # under a new nick from the same host.
+    #
+    # Batched: lines collect for 10s and go as ONE Discord message, so a raid
+    # of fifty joins is a single post rather than fifty that trip Discord's
+    # rate limit. Target: LUNA_JOINLOG_CHANNEL (name or numeric id); if unset,
+    # the first Discord channel whose name contains "leave" (the server already
+    # has a join-and-leave-logs channel), else "bot-logs". LUNA_JOINLOG=off
+    # disables it; LUNA_JOINLOG_ALL=on also logs shadow and followed rooms.
+
+    def _joinlog_wanted(self, room: str) -> bool:
+        if os.getenv("LUNA_JOINLOG", "on").strip().lower() in ("0", "off", "false", "no"):
+            return False
+        r = (room or "").lower()
+        if r in self._home_rooms():
+            return True
+        if os.getenv("LUNA_JOINLOG_ALL", "").strip().lower() in ("1", "on", "true", "yes"):
+            return r in (self._shadow or set()) or r in {c.lower() for c in (self._follow or set())}
+        return False
+
+    @staticmethod
+    def _host_of(line: str) -> str:
+        """'user@host' from ':nick!user@host COMMAND ...', or ''."""
+        pfx = line.split(" ", 1)[0].lstrip(":")
+        return pfx.split("!", 1)[1] if "!" in pfx else ""
+
+    def _joinlog(self, text: str) -> None:
+        if not hasattr(self, "_joinlog_lock"):
+            self._joinlog_lock = threading.Lock()
+            self._joinlog_buf: List[str] = []
+            self._joinlog_timer = None
+        with self._joinlog_lock:
+            self._joinlog_buf.append(f"`{time.strftime('%H:%M:%S', time.gmtime())}` {text}")
+            if len(self._joinlog_buf) > 300:          # a raid must not eat RAM
+                del self._joinlog_buf[:-300]
+            if self._joinlog_timer is None:
+                t = threading.Timer(10.0, self._joinlog_flush)
+                t.daemon = True
+                self._joinlog_timer = t
+                t.start()
+
+    def _joinlog_flush(self) -> None:
+        with self._joinlog_lock:
+            lines, self._joinlog_buf = self._joinlog_buf, []
+            self._joinlog_timer = None
+        if not lines or self.loop is None or not self.loop.is_running():
+            return
+        # Discord caps a message at 2000 chars; pack lines into chunks under it.
+        chunks, cur = [], ""
+        for ln in lines:
+            if len(cur) + len(ln) + 1 > 1900:
+                chunks.append(cur)
+                cur = ""
+            cur += ln + "\n"
+        if cur:
+            chunks.append(cur)
+        asyncio.run_coroutine_threadsafe(self._joinlog_post(chunks), self.loop)
+
+    async def _joinlog_post(self, chunks: List[str]) -> None:
+        want = (os.getenv("LUNA_JOINLOG_CHANNEL", "") or "").strip()
+        ch = self._get_bridge_channel(want) if want else None
+        if ch is None and not want and self.bot:
+            for g in self.bot.guilds:
+                ch = next((c for c in g.text_channels if "leave" in c.name.lower()), None)
+                if ch:
+                    break
+        if ch is None:
+            ch = self._get_bridge_channel("bot-logs")
+        if ch is None:
+            if not getattr(self, "_joinlog_warned", False):
+                self._joinlog_warned = True
+                print("[irc_bridge] join log: no Discord channel found "
+                      "(set LUNA_JOINLOG_CHANNEL) — join/leave lines are not being posted.",
+                      flush=True)
+            return
+        for c in chunks:
+            try:
+                await ch.send(c[:2000])
+            except Exception as e:             # noqa: BLE001
+                print(f"[irc_bridge] join log send error: {e}", flush=True)
+                return
+
     def _admin_relay(self, source_room: str, nick: str, message: str) -> None:
         """Pipe a watcher-room line to a dedicated Discord admin channel so
         the owner can scan non-home IRC traffic from mobile. Rate-limited

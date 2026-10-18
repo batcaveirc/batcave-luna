@@ -101,6 +101,11 @@ HIDDEN = {
     'leave':     'variant of $part, which is advertised',
     'following': 'the status read-out for $follow',
     'follow':    'feature is off (IRC_FOLLOW=0); $part is the kept half',
+    # Owner-only probes (2026-10-11): post a line into Discord as Luna, or via
+    # a webhook, to test whether another Discord bot answers bot messages.
+    # Diagnostic tools for the owner, not features for the room.
+    'dcecho':    'owner-only bot-proxy probe',
+    'dcechowh':  'owner-only bot-proxy probe (webhook variant)',
     # Action verbs — all listed together in the fun line as 'hug|pat|slap|bite|poke|highfive|cheer <nick>'; $hug is the one the
     # {p}-regex catches, the siblings are the same family.
     'pat': 'action verb, shown with $hug', 'slap': 'action verb, shown with $hug',
