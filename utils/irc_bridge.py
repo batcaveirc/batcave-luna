@@ -618,7 +618,7 @@ class IRCBridge:
         with self._nicks_lock:
             pfx = self._prefixes.get(key)
         if pfx is None and self._connected:
-            self._raw(f"NAMES {irc_channel}")
+            self._names_once(irc_channel)
             return False
         return bool(re.search(r"[~&@%]", pfx or ""))
 
@@ -636,7 +636,21 @@ class IRCBridge:
         if self._connected:
             ch = irc_channel or self._default_irc_channel()
             if ch:
-                self._raw(f"NAMES {ch}")
+                self._names_once(ch)
+
+    _NAMES_GAP = 120.0
+
+    def _names_once(self, ch: str) -> None:
+        """NAMES at most once per room per two minutes. A cache miss for every
+        stranger who speaks must not become a NAMES per line."""
+        now = time.time()
+        asked = getattr(self, "_names_asked", None)
+        if asked is None:
+            asked = self._names_asked = {}
+        if now - asked.get(ch.lower(), 0.0) < self._NAMES_GAP:
+            return
+        asked[ch.lower()] = now
+        self._raw(f"NAMES {ch}")
 
     def is_connected(self) -> bool:
         return self._connected
@@ -1240,6 +1254,13 @@ class IRCBridge:
                 self._notice(nick, f"{config.PREFIX}nsfw on  ·  {config.PREFIX}nsfw off")
                 return True
             cur = self.get_topic(irc_ch) or ""
+            new = (self._nsfw.topic_with_notice(cur) if arg == "on"
+                   else self._nsfw.topic_without_notice(cur))
+            if new.strip() == cur.strip():
+                # Already in that state: re-sending the same topic still makes
+                # the server announce a "topic change" to the whole room.
+                self._notice(nick, f"Adult mode is already {arg} — topic left alone.")
+                return True
             if arg == "on":
                 self._raw(f"TOPIC {irc_ch} :{self._nsfw.topic_with_notice(cur)}")
                 self._notice(nick, "Adult mode on — the topic now says so, so everyone "
@@ -2235,7 +2256,10 @@ class IRCBridge:
                               f"`{self._host_of(line)}`"
                               + (f" · account `{acct}`" if acct else " · unregistered"))
             if nick.lower() == config.IRC_NICK.lower():
-                self._raw(f"NAMES {channel}")   # populate nick list on own join
+                # No NAMES here. The server sends the member list (353/366) on
+                # every JOIN by itself; asking again doubled the traffic at
+                # connect and the flood shield dropped all five requests.
+                pass
             else:
                 try:
                     self.moderator.check_join(channel, nick)
