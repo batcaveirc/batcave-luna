@@ -206,6 +206,70 @@ def main():
           f"{'' if ok else ' — advertised but unreachable: ' + ', '.join(unreachable)}")
     fails += 0 if ok else 1
 
+    # ── per-surface parity, not "advertised somewhere" ──────────────────
+    #
+    # Everything above is satisfied by a command appearing on EITHER surface.
+    # That is exactly how the adult family hid: $help nsfw listed eight of them
+    # on IRC while the Discord embed mentioned none, so a Discord user could not
+    # discover a feature the same bot advertises on the other surface. Two help
+    # paths for one bot have to describe the same bot.
+    bridge_src = pathlib.Path('utils/irc_bridge.py').read_text()
+    grp = re.search(r'NSFW_CMDS = \(([^)]*)\)', bridge_src)
+    nsfw = set(re.findall(r'"(\w+)"', grp.group(1))) if grp else set()
+    for label, adv in paths:
+        missing = sorted(nsfw - adv)
+        ok = not missing
+        print(f"  [{'PASS' if ok else 'FAIL'}] {label} lists the adult commands"
+              f"{'' if ok else ' — missing ' + ', '.join(missing)}")
+        fails += 0 if ok else 1
+
+    # $trivia is advertised with the fun commands on IRC and was absent from the
+    # Discord embed, which is the same fault in miniature.
+    for label, adv in paths:
+        ok = 'trivia' in adv
+        print(f"  [{'PASS' if ok else 'FAIL'}] {label} mentions $trivia")
+        fails += 0 if ok else 1
+
+    # ── every subtopic actually answers ──────────────────────────────────
+    #
+    # Everything above is a text audit: it reads help and checks the names. It
+    # cannot see a subtopic that raises, returns nothing, or silently falls
+    # through — and "the page you asked for is the page you get" is the whole
+    # reason help is split up. $help mod returned silence for weeks after the
+    # prefix moved, and a static check would have called that documented.
+    sys.path.insert(0, '.')
+    import config as _cfg
+    from shared_cmds import SharedCommands
+    sc = SharedCommands.__new__(SharedCommands)
+    sc.bot = None
+    sc.bridge = None
+    sc._channel = ""
+    topics = ("", "fun", "games", "mod", "moderation", "memory", "mem",
+              "history", "nsfw", "adult", "afterdark", "irc", "bridge")
+    said = {}
+    for sub in topics:
+        try:
+            said[sub] = sc.cmd_help("irc", "somebody", sub) or ""
+        except Exception as e:                      # noqa: BLE001
+            said[sub] = f"[raised] {e}"
+    silent = [s or "(default)" for s, v in said.items()
+              if not v.strip() or v.startswith("[raised]")]
+    ok = not silent
+    print(f"  [{'PASS' if ok else 'FAIL'}] every $help subtopic answers"
+          f"{'' if ok else ' — silent or broken: ' + ', '.join(silent)}")
+    fails += 0 if ok else 1
+
+    # The subtopics are useless if the page people actually see does not name
+    # them. $help nsfw existed for weeks while the default page never mentioned
+    # it, which is indistinguishable from not having it.
+    default = said.get("", "")
+    unnamed = [s for s in ("fun", "memory", "nsfw", "bridge")
+               if f"{_cfg.PREFIX}help {s}" not in default]
+    ok = not unnamed
+    print(f"  [{'PASS' if ok else 'FAIL'}] the default page names the subtopics it hides"
+          f"{'' if ok else ' — not mentioned: ' + ', '.join(unnamed)}")
+    fails += 0 if ok else 1
+
     print('\nALL PASS' if not fails else f'\n{fails} FAILED')
     return 1 if fails else 0
 

@@ -347,7 +347,20 @@ async def help_cmd(ctx):
     em.add_field(
         name  = "🎲 Social",
         value = f"`{p}ship <a> <b>` `{p}vibe` `{p}tod` `{p}truth` `{p}dare`\n"
-                f"`{p}confess` `{p}tea` `{p}seduce`",
+                f"`{p}confess` `{p}tea` `{p}seduce` `{p}trivia` — one question at a time",
+        inline=False,
+    )
+    # The adult family is the one section IRC had and this embed did not:
+    # $help nsfw listed eight commands on IRC while a Discord user could not
+    # discover a single one of them. Same bot, same features, two surfaces —
+    # test_help_audit.py now checks them both for exactly this.
+    em.add_field(
+        name  = "🔞 Adult *(only where an op set the room to 18+)*",
+        value = f"`{p}nsfw on|off` *(mod, typed on IRC)* — marks the IRC room adult "
+                "and writes the notice into its topic\n"
+                f"`{p}afterdark` `{p}tempt` `{p}spicy` `{p}fantasy` `{p}midnight` "
+                f"`{p}desire <nick>`\n"
+                f"`{p}boundaries` — leave me out of it · `{p}boundaries off` — rejoin",
         inline=False,
     )
     # Discord moderation was removed: Discord does all of it natively, with an
