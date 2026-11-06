@@ -1,0 +1,40 @@
+name: Tests
+
+# Before this, a push to main ran the bot and nothing else: luna.yml deploys,
+# and the verification chain in CLAUDE.md ("py_compile", "for t in test_*.py")
+# was only ever typed by hand. A test you cannot re-run is a test you ran once.
+#
+# Everything here is offline. The suites bind no sockets and call no provider,
+# so this job costs a couple of minutes and can never page anybody's meter.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-luna
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # MUST match luna.yml. The code annotates `X | None` and evaluates it
+          # at def time, so 3.9 fails nine suites with a TypeError that reads
+          # like a bridge bug and is not one.
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: pip install --disable-pip-version-check -r requirements.txt
+      - name: Compile
+        run: python -m py_compile luna.py cogs/ai_cog.py utils/irc_bridge.py
+      - name: Test suites
+        run: sh run_tests.sh

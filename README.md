@@ -64,6 +64,16 @@ In Discord: `$ircjoin #channel` maps the current Discord channel to an IRC
 channel, `$ircpart` unmaps it, `$ircbridges` lists the mappings,
 `$ircinfo` / `$ircping` report status. `$ai <question>` asks Luna something.
 
+## Tests
+
+`sh run_tests.sh` runs every suite (`sh run_tests.sh memory` filters by name).
+It is the loop CLAUDE.md asks for by hand, with the failures counted, so the
+exit status means what it says. Needs Python **3.10+** — the annotations use
+`X | None`, which is evaluated at def time and raises on 3.9 — and
+`pip install -r requirements.txt`. Nothing in the suites opens a socket or
+calls an AI provider. The `Tests` workflow runs them on every push and pull
+request, on the same 3.12 the bot itself runs.
+
 ## What this repo deliberately does not contain
 
 This repository is **public** — that is what makes the Actions minutes free —
