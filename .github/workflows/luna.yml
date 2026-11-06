@@ -112,6 +112,11 @@ jobs:
           # Phase 2+3 teamwork. Defaults are fine; override only if the trust
           # channel moves or the heartbeat cadence needs tuning.
           IRC_TRUST_CHANNEL: ${{ secrets.IRC_TRUST_CHANNEL || '#batcave-trust' }}
+          # Inter-bot chatter has its own room. The trust channel is durable
+          # storage (ChanServ flags), so telemetry does not belong in it. The
+          # bus holds nothing and is safe to create or lose. Empty = put the
+          # chatter back in the trust channel.
+          IRC_TRUST_BUS: ${{ secrets.IRC_TRUST_BUS || '#batcave-bus' }}
           TRUST_HB_MS: ${{ secrets.TRUST_HB_MS || '180000' }}
           # Shadow rooms: rooms Luna JOINS SILENTLY on behalf of Dracula where
           # Dracula is banned. Never speaks there — just reads, remembers, and

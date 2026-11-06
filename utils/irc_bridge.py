@@ -100,6 +100,20 @@ _FOLLOW_IDLE = max(10, int(os.getenv("FOLLOW_IDLE_MIN", "45"))) * 60
 # kicked hazel out of the room. Two lists for one idea is how that happens; this
 # reads the same one Dracula writes.
 TRUST_CHANNEL = os.getenv("IRC_TRUST_CHANNEL", "#batcave-trust")
+# Where the two bots talk to EACH OTHER. Separate from TRUST_CHANNEL because
+# that room's ChanServ access list IS the trust database: it should read as
+# flags and people, not telemetry. This room holds nothing durable, so losing
+# it costs nothing. Set IRC_TRUST_BUS empty to put the chatter back there.
+TRUST_BUS = os.getenv("IRC_TRUST_BUS", "#batcave-bus")
+
+
+def _bus_channel() -> str:
+    """Where the bots talk to each other; '' when teamwork is off entirely."""
+    if not TRUST_CHANNEL:
+        return ""
+    return TRUST_BUS or TRUST_CHANNEL
+
+
 _TRUST_REFRESH = 3600
 _TRUST_RETRY = 90
 _TRUST_ROW = re.compile(r"^\s*\d+\s+(\S+)\s+(\+\S*)")
@@ -271,7 +285,13 @@ class IRCBridge:
 
         # ── Outbound send queue ──────────────────────────────────────────────
         self._send_q: deque = deque()            # (irc_channel, text)
+        # Lowest priority in the process: what the two bots tell EACH OTHER.
+        # Never let one of these occupy the slot a reply needed (see
+        # _take_next_out).
+        self._bus_q: deque = deque()             # (irc_channel, text, verb)
         self._send_lock = threading.Lock()
+        self._last_bus_out: float = 0.0
+        self._peer_actions: Dict[str, dict] = {}   # nick(lower) -> what the partner did
 
 
         # The nick we are ACTUALLY using. Not always config.IRC_NICK: a 433
@@ -591,6 +611,13 @@ class IRCBridge:
         irc_ch = channel or self._default_irc_channel()
         if irc_ch:
             self.send_raw(f"KICK {irc_ch} {nick} :{reason[:200]}")
+            # Tell the partner, so one incident yields one record instead of
+            # two bots each removing the same person for it.
+            try:
+                self._trust_send("act", {"n": nick, "a": "kick", "c": irc_ch,
+                                         "t": int(time.time())})
+            except Exception:
+                pass
         return True
 
     def ban_irc(self, nick: str, channel: str = "") -> bool:
@@ -901,13 +928,34 @@ class IRCBridge:
 
     # ── Phase 2: inter-bot teamwork via #batcave-trust ─────────────────
     def _trust_send(self, verb: str, data: dict) -> None:
-        """Compact machine message to the trust channel. Human chatter there
-        is ignored; bots only parse lines prefixed with '::'."""
-        if not TRUST_CHANNEL:
+        """Compact machine message to the BUS channel.
+
+        Queued, not written. This used to go straight to _raw(), which put a
+        heartbeat in the middle of a game's invites and spent flood budget a
+        reply needed. Now it only moves when nothing a person is waiting on is
+        queued (see _take_next_out).
+        """
+        chan = _bus_channel()
+        if not chan:
             return
         try:
             import json as _json
-            self._raw(f"PRIVMSG {TRUST_CHANNEL} :::{verb} {_json.dumps(data, separators=(',', ':'))}")
+            line = f"::{verb} {_json.dumps(data, separators=(',', ':'))}"
+            q = getattr(self, "_bus_q", None)
+            if q is None:
+                q = deque()
+                self._bus_q = q
+            lock = getattr(self, "_send_lock", None)
+            if lock is None:
+                if len(q) >= 30:
+                    q.popleft()
+                q.append((chan, line, "PRIVMSG"))
+            else:
+                with lock:
+                    if len(q) >= 30:
+                        q.popleft()   # a status line, not a log
+                    q.append((chan, line, "PRIVMSG"))
+            self._last_bus_out = time.time()
         except Exception:
             pass            # never block normal operation
 
@@ -930,10 +978,25 @@ class IRCBridge:
             data = _json.loads(payload) if payload else {}
         except Exception:
             return
+        # Proof of life is the SENDER, and it is ANY verb — not just ::hb. A bot
+        # in the middle of a game or an invite burst can have its heartbeat
+        # queued behind real work, and that delay must not read as "it died".
+        mine = (self._nick or "").lower()
+        claimed = str(data.get("n", "")).lower() if verb == "hb" else ""
+        if from_nick and from_nick.lower() != mine and claimed != mine:
+            self._partner_last_seen = time.time()
         if verb == "hb":
-            n = str(data.get("n", "")).lower()
-            if n and n != (self._nick or "").lower():
-                self._partner_last_seen = time.time()
+            return
+        if verb == "act":
+            # The partner removed somebody. Keep one record of one incident.
+            who = str(data.get("n", ""))
+            if who:
+                what = str(data.get("a") or "act")[:24]
+                self._peer_actions[who.lower()] = {
+                    "at": time.time(), "act": what, "chan": str(data.get("c") or ""),
+                }
+                print(f"[irc_bridge] [PEER] partner {what} on {who} "
+                      "— recorded, not repeated.", flush=True)
             return
         if verb == "saw":
             # Partner saw a line; merge with source=remote so we do NOT loop.
@@ -966,12 +1029,22 @@ class IRCBridge:
             self._raw(f"JOIN {TRUST_CHANNEL}")
         except Exception:
             pass
-
-        def _beat():
+        bus = _bus_channel()
+        if bus and bus != TRUST_CHANNEL:
             try:
-                self._trust_send("hb", {"n": self._nick, "t": int(time.time())})
+                self._raw(f"JOIN {bus}")
             except Exception:
                 pass
+
+        def _beat():
+            # Event-driven, not a metronome: if we have told the partner
+            # anything this window, that silence is already broken and a
+            # heartbeat would be noise. A busy bot sends NONE.
+            if time.time() - getattr(self, "_last_bus_out", 0.0) >= _TRUST_HB_SEC:
+                try:
+                    self._trust_send("hb", {"n": self._nick, "t": int(time.time())})
+                except Exception:
+                    pass
             # Reschedule
             self._trust_hb_timer = threading.Timer(_TRUST_HB_SEC, _beat)
             self._trust_hb_timer.daemon = True
@@ -1528,16 +1601,32 @@ class IRCBridge:
             print(f"[irc_bridge] Not opped in {irc_ch} — listening only (mod-only speech is on).")
         return False
 
+    def _take_next_out(self):
+        """Next line to write, interactive work first.
+
+        Bus traffic (`::hb`, `::saw`, `::act`) is the LOWEST priority in the
+        process: it is for the other bot, nobody in a room is waiting for it,
+        and it has no deadline worth queue-jumping for. It exists to fill a
+        silence, so it waits for one.
+        """
+        with self._send_lock:
+            if self._send_q:
+                return self._send_q.popleft()
+            bus = getattr(self, "_bus_q", None)
+            if bus:
+                return bus.popleft()
+        return None
+
     def _sender_loop(self):
         """Drain the send queue at _SEND_DELAY intervals (rate-limiting)."""
         while self._running:
             time.sleep(_SEND_DELAY)
             if not self._connected:
                 continue
-            with self._send_lock:
-                if not self._send_q:
-                    continue
-                irc_ch, text, verb = self._send_q.popleft()
+            out = self._take_next_out()
+            if out is None:
+                continue
+            irc_ch, text, verb = out
             if not self._may_speak(irc_ch, verb):
                 continue
             try:

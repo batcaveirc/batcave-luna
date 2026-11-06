@@ -37,6 +37,12 @@ class _StubBot:
     pass
 
 
+def _bus(b):
+    """Lines waiting on the idle lane. Bus traffic is queued, never written
+    straight to the socket, so this is where ::saw/::hb/::act show up."""
+    return [x[1] for x in getattr(b, "_bus_q", [])]
+
+
 def _make_bridge():
     """The IRC bridge was designed to run alone; its __init__ wires a lot of
     state. For a pure-logic test we only need the fields the methods below
@@ -51,6 +57,14 @@ def _make_bridge():
     b._shadow = set()                      # default: no shadow rooms
     b._raw_log = []
     b._raw = lambda line: b._raw_log.append(line)
+    # Lowest-priority lane: queued separately, drained only when the
+    # interactive queue is empty (see _take_next_out).
+    from collections import deque as _deque
+    b._bus_q = _deque()
+    b._send_q = _deque()
+    b._send_lock = threading.Lock()
+    b._last_bus_out = 0.0
+    b._peer_actions = {}
     b.is_one_of_ours = lambda nick: nick.lower() in {"andromeda", "darkcloud", "nosferatu"}
     return b
 
@@ -118,6 +132,22 @@ c("self heartbeat ignored", b._partner_last_seen == 0.0, str(b._partner_last_see
 b._handle_trust_line("DarkCloud", '::hb {"n":"DarkCloud","t":1759000005}')
 c("partner heartbeat recorded", b._partner_last_seen > 0, str(b._partner_last_seen))
 
+print("\n— liveness is the SENDER, and any verb proves it —")
+b = _make_bridge()
+# A bot mid-game or mid-invite can have its ::hb queued behind real work. If
+# only ::hb counted, the partner would read that as "it died".
+b._handle_trust_line("DarkCloud",
+    '::saw {"n":"priya","m":"said enough to be worth sharing","r":"#batcave","t":1}')
+c("a ::saw line is proof of life, not just ::hb", b._partner_last_seen > 0)
+b = _make_bridge()
+b._handle_trust_line("DarkCloud", '::act {"n":"troll42","a":"kick","c":"#batcave","t":1}')
+c("a ::act line is proof of life too", b._partner_last_seen > 0)
+c("and the partner's action is recorded", "troll42" in b._peer_actions)
+c("…with what was done", b._peer_actions["troll42"]["act"] == "kick")
+b = _make_bridge()
+b._handle_trust_line("Andromeda", '::hb {"n":"Andromeda","t":9}')
+c("our own heartbeat echo is not proof of the partner", b._partner_last_seen == 0.0)
+
 print("\n— ::saw merges partner's observation into local memory —")
 b = _make_bridge()
 _ib.TRUST_CHANNEL = "#batcave-trust"
@@ -128,7 +158,7 @@ got = b._user_memory.get("shweta0", [])
 c("remote ::saw stored in local memory", len(got) == 1, f"got {len(got)}")
 c("room tagged (for diagnostics)", got and got[0].get("room") == "#batcave")
 # Must NOT broadcast ::saw back out — that would loop forever.
-saw_broadcasts = [l for l in b._raw_log if "::saw " in l]
+saw_broadcasts = [l for l in _bus(b) if "::saw " in l]
 c("remote ::saw does NOT re-broadcast (loop guard)", not saw_broadcasts, "\n".join(b._raw_log))
 
 print("\n— dedupe: a locally captured line and its ::saw echo coalesce —")
@@ -152,7 +182,7 @@ _ib.TRUST_CHANNEL = "#batcave-trust"
 # Capture a line in the shadow room — this is the whole point of shadow rooms.
 b._remember_line("some_user", "they were saying things about hazel earlier",
                  room="#dracula-banned")
-saw_shadow = [l for l in b._raw_log if "::saw " in l]
+saw_shadow = [l for l in _bus(b) if "::saw " in l]
 c("shadow-room capture DOES broadcast ::saw (Dracula's only path to this view)",
   len(saw_shadow) == 1, "\n".join(b._raw_log))
 # A random non-shadow non-home room still stays local (recv-queue safety).
@@ -160,7 +190,7 @@ b2 = _make_bridge()
 b2._shadow = set()
 b2._remember_line("someone", "random chatter in a passthrough room",
                   room="#chatindian")
-saw_other = [l for l in b2._raw_log if "::saw " in l]
+saw_other = [l for l in _bus(b2) if "::saw " in l]
 c("non-shadow, non-home room captures still stay LOCAL (no broadcast)",
   not saw_other, "\n".join(b2._raw_log))
 
@@ -174,7 +204,7 @@ c("room tag preserved", got and got[0].get("room") == "#chatindian")
 # incident on 2026-10-06 was Carfax dropping with "RecvQ exceeded" because
 # every notable line in every busy recruit room was amplifying onto one
 # trust channel.
-saw_cross = [l for l in b._raw_log if "::saw " in l]
+saw_cross = [l for l in _bus(b) if "::saw " in l]
 c("cross-room capture does NOT broadcast ::saw (recv-queue safety)",
   not saw_cross, "\n".join(b._raw_log))
 
@@ -185,7 +215,7 @@ print("\n— home-channel capture does NOT broadcast ::saw (owner shrink 2026-10
 b = _make_bridge()
 _ib.TRUST_CHANNEL = "#batcave-trust"
 b._remember_line("priya", "the dinner was delicious tonight", room="#batcave")
-saw_home = [l for l in b._raw_log if "::saw " in l]
+saw_home = [l for l in _bus(b) if "::saw " in l]
 c("home-channel ::saw is NOT broadcast (redundant with direct visibility)",
   len(saw_home) == 0, "\n".join(b._raw_log))
 
@@ -239,7 +269,7 @@ b._shadow = {"#busy-shadow"}
 _ib.TRUST_CHANNEL = "#batcave-trust"
 for i in range(30):
     b._remember_line(f"speaker{i}", f"line number {i} with enough chars", room="#busy-shadow")
-saw_rate = [l for l in b._raw_log if "::saw " in l]
+saw_rate = [l for l in _bus(b) if "::saw " in l]
 c("at most 20 ::saw broadcasts in a burst (cap enforced on shadow too)",
   len(saw_rate) == 20, f"broadcast {len(saw_rate)}")
 # But the PROMPT must not reveal the room — that would blow the "sentient" feel.
@@ -282,13 +312,18 @@ c("malformed '::' ignored", b._partner_last_seen == 0.0)
 b._handle_trust_line("DarkCloud", "::hb {not json")
 c("bad JSON ignored (no raise)", b._partner_last_seen == 0.0)
 
-print("\n— _trust_send writes a compact JSON line to TRUST_CHANNEL —")
+print("\n— _trust_send QUEUES a compact line for the BUS —")
 b = _make_bridge()
-# TRUST_CHANNEL is a module-level const; snapshot and verify
-import utils.irc_bridge as _ib2
 _ib.TRUST_CHANNEL = "#batcave-trust"
+_ib.TRUST_BUS = "#batcave-bus"
 b._trust_send("hb", {"n": "Andromeda", "t": 1759000000})
-sent = [l for l in b._raw_log if l.startswith("PRIVMSG #batcave-trust")]
+c("nothing is written yet — interactive work goes first",
+  b._raw_log == [], "\n".join(b._raw_log))
+out = b._take_next_out()
+c("it drains from the BUS channel, not the trust room",
+  out is not None and out[0] == "#batcave-bus", repr(out))
+b._raw(f"{out[2]} {out[0]} :{out[1]}")
+sent = [l for l in b._raw_log if l.startswith("PRIVMSG #batcave-bus")]
 c("sent exactly one line", len(sent) == 1, "\n".join(b._raw_log))
 c("prefixed '::' so bots filter it", "::hb " in sent[0], sent[0])
 c("JSON is compact (no spaces after ':' or ',')",
