@@ -189,7 +189,7 @@ saw_home = [l for l in b._raw_log if "::saw " in l]
 c("home-channel ::saw is NOT broadcast (redundant with direct visibility)",
   len(saw_home) == 0, "\n".join(b._raw_log))
 
-print("\n— flood shield: _raw caps non-protocol writes at 10/s, drops excess —")
+print("\n— flood shield: _raw caps non-protocol writes at _FLOOD_LIMIT/s, drops excess —")
 # Not through _remember_line or ::saw — directly through _raw, so this proves
 # the shield covers EVERY outbound code path, including any future one.
 #

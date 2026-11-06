@@ -66,6 +66,12 @@ def _refused_at_the_door(exc) -> bool:
 _SOCKET_TIMEOUT      = 30    # detect dead connections fast
 _SEND_DELAY          = 0.5   # seconds between outbound IRC messages (rate-limit)
 
+# Reasons a server gives for cutting us off that mean WE sent too much. RecvQ is
+# its buffer of what we have already written to it, so an immediate reconnect is
+# the same burst arriving at the same queue.
+_FLOOD_COMPLAINT     = re.compile(r"recvq|sendq|excess\s*flood|flooding|too\s*fast|throttl", re.I)
+_FLOOD_MAX_WAIT      = 300.0  # seconds; past this the bot has been offline longer than useful
+
 _NICK_RECLAIM_SECS = 60      # how often to check we still hold our own nick
 _MEMORY_COOLDOWN = 8         # seconds between one person's history commands
 _RECENT_LINES = 25           # live tail kept per room for grounding the AI
@@ -1565,6 +1571,28 @@ class IRCBridge:
             return "slowdown"
         return "reset"
 
+    def _note_server_error(self, line: str) -> float:
+        """Notice a kill for flooding, and say how long to wait before rejoining.
+
+        The shield in _raw caps the rate; this is the other half. HybridIRC's
+        RecvQ kill means the bridge outran the ircd, and the failure mode is a
+        LOOP rather than a single drop: reconnect at once and the same burst
+        hits the same queue. Escalating wait, capped, so the bot comes back.
+
+        Returns the extra seconds to wait; 0 for an ERROR that is not about
+        flooding (a ping timeout, a ban) — those keep their existing handling.
+        """
+        text = str(line or "")
+        if not _FLOOD_COMPLAINT.search(text):
+            return 0.0
+        self._flood_kills = int(getattr(self, "_flood_kills", 0)) + 1
+        wait = min(_FLOOD_MAX_WAIT, 10.0 * (2 ** min(5, self._flood_kills - 1)))
+        self._flood_cooldown = wait
+        print(f"[irc_bridge] ★ Killed for flooding (#{self._flood_kills}). "
+              f"Waiting {wait:.0f}s before rejoining rather than reconnecting "
+              "into the same queue.", flush=True)
+        return wait
+
     def _run_forever(self):
         delay = _RECONNECT_DELAY_MIN
         while self._running:
@@ -1590,6 +1618,15 @@ class IRCBridge:
                 # address-level refusal and backed off hard, while a drop after a
                 # real session keeps the fast retry it needs.
                 action = self._note_refusal(e)
+                # A long, clean session earns the escalation back: one bad
+                # evening must not leave the bot at a five-minute wait for the
+                # rest of the run.
+                if time.time() - getattr(self, "_connect_time", time.time()) > 600:
+                    self._flood_kills = 0
+                cooldown = float(getattr(self, "_flood_cooldown", 0) or 0)
+                self._flood_cooldown = 0
+                if cooldown:
+                    delay = max(delay, cooldown)
                 if action == "slowdown":
                     delay = _REFUSED_RETRY
                 elif action == "exit":
@@ -1746,6 +1783,9 @@ class IRCBridge:
         # ERROR :Closing Link — server is booting us
         if line.startswith("ERROR"):
             print(f"[irc_bridge] Server error: {line}")
+            # Recorded BEFORE the raise so the reconnect loop can see it: the
+            # cooldown has to be set by the reason, not guessed afterwards.
+            self._note_server_error(line)
             raise ConnectionError(line)
 
         # ChanServ's FLAGS listing, which is the trust list.
@@ -2821,7 +2861,11 @@ class IRCBridge:
     # roughly 10 lines/sec sustained — the 2026-10-06 Carfax drop proved it.
     # Everyday traffic is well under the cap; a dropped non-protocol line is
     # survivable, a server flood-kill is not.
-    _FLOOD_LIMIT = 10
+    # 10/s is what this network TOLERATES, not a target to sit on: a bridge at
+    # the ceiling is one burst away from the kill the shield exists to prevent,
+    # and protocol lines (PING/PONG/QUIT) bypass the cap entirely. Six leaves
+    # that headroom without losing ordinary traffic.
+    _FLOOD_LIMIT = 6
     _FLOOD_WINDOW_SEC = 1.0
     _FLOOD_EXEMPT = ("PING", "PONG", "QUIT")
 
