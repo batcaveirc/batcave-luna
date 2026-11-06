@@ -2235,6 +2235,37 @@ class IRCBridge:
                     self._remember_line(nick, message, room=target)
             except Exception as e:  # noqa: BLE001 — memory must never break chat
                 print(f"[irc_bridge] memory error: {e}")
+
+            # ── Clapback: somebody is going at one of ours ────────────────
+            # Before relay and before commands, because the ROOM's answer
+            # should land first — the point is that a regular is defended in
+            # public, not processed quietly. Home rooms only: Luna is a guest
+            # in the rooms she watches, and speaking there is how a bot loses
+            # the place worth watching.
+            if target.startswith("#") and target.lower() in self._home_rooms():
+                try:
+                    cb = getattr(self, "_clapback", None)
+                    if cb is None:
+                        from utils.clapback import Clapback as _Clapback
+                        cb = _Clapback()
+                        self._clapback = cb
+                    hit = cb.check(
+                        message, nick,
+                        is_protected=lambda n: self.moderator._exempt(n, target),
+                        nsfw=self._nsfw.room_is_adult(target),
+                    )
+                    if hit:
+                        self._queue(target, hit["line"])
+                        # Proportion, not reflex: a mild insult gets the line
+                        # and nothing else, abuse goes through the ladder Luna
+                        # already has (devoice first), and only a threat in a
+                        # room she is opped in removes somebody.
+                        if hit["tier"] >= 2:
+                            self.moderator._act(target, nick, hit["reason"])
+                        if hit["tier"] >= 3 and self._may_speak(target, "PRIVMSG"):
+                            self.kick_irc(nick, hit["reason"], target)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[irc_bridge] clapback error: {e}")
             # A live trivia line? Check it before anything else consumes the msg.
             if self._trivia_channel and not message.startswith(config.PREFIX):
                 self.check_trivia_answer(target, nick, message)

@@ -269,7 +269,9 @@ class SharedCommands:
                 f"[\x02Adult\x02] Only in rooms an operator set to adult mode "
                 f"(the topic will say {chr(0x1F51E)}, and being in the room is your "
                 f"agreement). {p}afterdark · {p}tempt {p}spicy {p}fantasy "
-                f"{p}midnight {p}desire <nick>. Don't want to be involved? "
+                f"{p}midnight {p}desire <nick>. The register is open there: "
+                f"ordinary profanity is not policed in an adult room — slurs and "
+                f"threats still are. Don't want to be involved? "
                 f"{p}boundaries and I leave you out — {p}boundaries off to rejoin."
             )
         if sub in ("memory", "mem", "history"):
